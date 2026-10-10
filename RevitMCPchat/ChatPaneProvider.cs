@@ -23,7 +23,7 @@ public sealed class ChatPaneProvider : IDockablePaneProvider, System.IDisposable
             return;
         }
 
-        _page.DataContext = null;
+        _page.Dispose();
         _page.Content = null;
         _page = null;
     }

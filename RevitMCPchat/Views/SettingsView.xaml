@@ -1,0 +1,36 @@
+<UserControl x:Class="RevitMCPchat.Views.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="16" MaxWidth="620" HorizontalAlignment="Left">
+            <TextBlock Text="Провайдер ИИ" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12" />
+            <TextBlock Text="Сервис" />
+            <ComboBox ItemsSource="{Binding Providers}" DisplayMemberPath="DisplayName"
+                      SelectedValuePath="ProviderId" SelectedValue="{Binding ProviderId, UpdateSourceTrigger=PropertyChanged}"
+                      Margin="0,4,0,10" />
+            <TextBlock Text="Название профиля" />
+            <TextBox Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,10" />
+            <TextBlock Text="Адрес API" />
+            <TextBox Text="{Binding BaseUrl, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,10" />
+            <TextBlock Text="Идентификатор модели" />
+            <TextBox Text="{Binding ModelId, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,10" />
+            <TextBlock Text="Ключ API" />
+            <PasswordBox x:Name="ApiKeyBox" PasswordChanged="OnPasswordChanged" Margin="0,4,0,4" />
+            <TextBlock Text="После сохранения ключ очищается и отображается только его наличие." FontSize="11" Foreground="#FF667085" TextWrapping="Wrap" />
+            <TextBlock Text="Идентификатор каталога Yandex (folder_id)" Margin="0,12,0,0" />
+            <TextBox Text="{Binding FolderId, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,10" />
+            <TextBlock Text="Область GigaChat (scope)" />
+            <TextBox Text="{Binding Scope, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,10" />
+            <TextBlock Text="Максимум токенов ответа Anthropic" />
+            <TextBox Text="{Binding MaxTokens, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,10" />
+            <CheckBox Content="Модель поддерживает вызов инструментов" IsChecked="{Binding SupportsTools}" Margin="0,0,0,12" />
+            <WrapPanel>
+                <Button Content="Загрузить" Command="{Binding LoadCommand}" Padding="12,5" Margin="0,0,8,0" />
+                <Button Content="Сохранить настройки" Command="{Binding SaveCommand}" Padding="12,5" Margin="0,0,8,0" />
+                <Button Content="Удалить мой ключ" Command="{Binding DeleteUserKeyCommand}" Padding="12,5" />
+            </WrapPanel>
+            <TextBlock Margin="0,12,0,0"><Run Text="Источник ключа: "/><Run Text="{Binding EffectiveCredentialSource, Mode=OneWay}" /></TextBlock>
+            <TextBlock Text="{Binding StatusMessage}" Margin="0,6,0,0" Foreground="#FF667085" TextWrapping="Wrap" />
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

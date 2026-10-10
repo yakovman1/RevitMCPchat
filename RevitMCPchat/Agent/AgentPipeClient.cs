@@ -7,7 +7,7 @@ using RevitMcpChat.Contracts;
 
 namespace RevitMCPchat.Agent;
 
-public sealed class AgentPipeClient
+public sealed class AgentPipeClient : IAgentCommandClient
 {
     private readonly string _pipeName;
 

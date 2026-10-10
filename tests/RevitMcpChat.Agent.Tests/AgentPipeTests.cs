@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using RevitMcpChat.Agent;
 using RevitMcpChat.Agent.Ipc;
+using RevitMcpChat.Agent.Settings;
 using RevitMCPchat.Agent;
 using RevitMcpChat.Contracts;
 using Xunit;
@@ -80,6 +81,55 @@ public sealed class AgentPipeTests
                     cancellation.Token);
 
                 Assert.Equal("invalid_command", reply.ErrorCode);
+            }
+            finally
+            {
+                cancellation.Cancel();
+                await serverTask;
+            }
+        }
+        finally
+        {
+            await workspace.DisposeAsync();
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(temp, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HistoryCreateCommandCreatesModelScopedChat()
+    {
+        var temp = Path.Combine(Path.GetTempPath(), "RevitMcpChatHistoryCreate-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        var workspace = new AgentWorkspace(temp);
+        try
+        {
+            await workspace.SetActiveProviderAsync(new ProviderProfile
+            {
+                ProviderId = "openai",
+                DisplayName = "OpenAI",
+                ModelId = "gpt-4o-mini"
+            });
+
+            var pipeName = AgentPipeNames.ForRevitPid(Environment.ProcessId);
+            using var cancellation = new CancellationTokenSource();
+            var server = new AgentPipeServer(pipeName, new AgentCommandDispatcher(workspace, Environment.ProcessId));
+            var serverTask = server.RunAsync(cancellation.Token);
+            try
+            {
+                var modelIdentity = ModelIdentity.ForSaved(@"C:\Projects\CreateChat.rvt");
+                var reply = await new AgentPipeClient(pipeName).SendAsync(new AgentCommand
+                {
+                    Kind = AgentCommandKinds.HistoryCreate,
+                    PayloadJson = AgentPayloadJson.Serialize(new HistoryCreateRequest { ModelIdentity = modelIdentity })
+                }, cancellation.Token);
+
+                Assert.Equal(AgentReplyKinds.Response, reply.Kind);
+                var created = AgentPayloadJson.Deserialize<HistoryChatRequest>(reply.PayloadJson);
+                var transcript = await workspace.OpenChatAsync(created.ChatId);
+                Assert.Equal(modelIdentity, transcript.ModelIdentity);
+                Assert.Equal("openai", transcript.ProviderId);
+                Assert.Equal("gpt-4o-mini", transcript.ModelId);
             }
             finally
             {

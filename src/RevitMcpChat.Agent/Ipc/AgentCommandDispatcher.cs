@@ -57,6 +57,7 @@ public sealed class AgentCommandDispatcher : IAgentCommandDispatcher
                 AgentCommandKinds.Send => await SendAsync(command, publishAsync, cancellationToken).ConfigureAwait(false),
                 AgentCommandKinds.Approve or AgentCommandKinds.Reject => await DecideAsync(command, cancellationToken).ConfigureAwait(false),
                 AgentCommandKinds.HistoryList => await ListHistoryAsync(command, cancellationToken).ConfigureAwait(false),
+                AgentCommandKinds.HistoryCreate => await CreateHistoryAsync(command, cancellationToken).ConfigureAwait(false),
                 AgentCommandKinds.HistoryOpen => await OpenHistoryAsync(command, cancellationToken).ConfigureAwait(false),
                 AgentCommandKinds.HistoryRename => await RenameHistoryAsync(command, cancellationToken).ConfigureAwait(false),
                 AgentCommandKinds.HistoryDelete => await DeleteHistoryAsync(command, cancellationToken).ConfigureAwait(false),
@@ -185,6 +186,18 @@ public sealed class AgentCommandDispatcher : IAgentCommandDispatcher
             UpdatedAt = summary.UpdatedAt
         }).ToList();
         return Response(command.RequestId, AgentPayloadJson.Serialize(result));
+    }
+
+    private async Task<AgentReply> CreateHistoryAsync(AgentCommand command, CancellationToken cancellationToken)
+    {
+        var request = AgentPayloadJson.Deserialize<HistoryCreateRequest>(command.PayloadJson);
+        if (string.IsNullOrWhiteSpace(request.ModelIdentity))
+        {
+            return Error(command.RequestId, "invalid_model", "Open a Revit model before starting a chat.");
+        }
+
+        var chatId = await _workspace.CreateChatAsync(request.ModelIdentity, cancellationToken).ConfigureAwait(false);
+        return Response(command.RequestId, AgentPayloadJson.Serialize(new HistoryChatRequest { ChatId = chatId }));
     }
 
     private async Task<AgentReply> OpenHistoryAsync(AgentCommand command, CancellationToken cancellationToken)

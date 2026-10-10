@@ -43,6 +43,7 @@ namespace RevitMcpChat.Contracts
         public const string Approve = "approve";
         public const string Reject = "reject";
         public const string HistoryList = "history-list";
+        public const string HistoryCreate = "history-create";
         public const string HistoryOpen = "history-open";
         public const string HistoryRename = "history-rename";
         public const string HistoryDelete = "history-delete";
@@ -62,6 +63,7 @@ namespace RevitMcpChat.Contracts
                 case Approve:
                 case Reject:
                 case HistoryList:
+                case HistoryCreate:
                 case HistoryOpen:
                 case HistoryRename:
                 case HistoryDelete:
@@ -179,6 +181,13 @@ namespace RevitMcpChat.Contracts
 
         [DataMember(Order = 2)]
         public bool AllChats { get; set; }
+    }
+
+    [DataContract]
+    public sealed class HistoryCreateRequest
+    {
+        [DataMember(Order = 1)]
+        public string ModelIdentity { get; set; } = string.Empty;
     }
 
     [DataContract]

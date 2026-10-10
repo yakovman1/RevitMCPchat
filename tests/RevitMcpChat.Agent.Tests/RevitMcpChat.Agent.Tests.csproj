@@ -19,6 +19,7 @@
     <None Update="FakeMcpServer.ps1" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="..\..\RevitMCPchat\Agent\IAgentCommandClient.cs" Link="IAgentCommandClient.cs" />
     <Compile Include="..\..\RevitMCPchat\Agent\AgentPipeClient.cs" Link="AgentPipeClient.cs" />
   </ItemGroup>
 </Project>

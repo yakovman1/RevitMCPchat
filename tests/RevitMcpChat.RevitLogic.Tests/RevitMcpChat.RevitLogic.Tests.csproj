@@ -15,8 +15,14 @@
     <ProjectReference Include="..\..\src\RevitMcpChat.Contracts\RevitMcpChat.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="..\..\RevitMCPchat\Agent\IAgentCommandClient.cs" Link="IAgentCommandClient.cs" />
     <Compile Include="..\..\RevitMCPchat\Agent\AgentPipeClient.cs" Link="AgentPipeClient.cs" />
     <Compile Include="..\..\RevitMCPchat\Agent\AgentProcessHost.cs" Link="AgentProcessHost.cs" />
+    <Compile Include="..\..\RevitMCPchat\ViewModels\ObservableViewModel.cs" Link="ObservableViewModel.cs" />
+    <Compile Include="..\..\RevitMCPchat\ViewModels\ChatViewModel.cs" Link="ChatViewModel.cs" />
+    <Compile Include="..\..\RevitMCPchat\ViewModels\HistoryViewModel.cs" Link="HistoryViewModel.cs" />
+    <Compile Include="..\..\RevitMCPchat\ViewModels\SettingsViewModel.cs" Link="SettingsViewModel.cs" />
+    <Compile Include="..\..\RevitMCPchat\ViewModels\ChatPaneViewModel.cs" Link="ChatPaneViewModel.cs" />
     <Compile Include="..\..\src\RevitMcpChat.Agent\Ipc\ModelBoundApprovalGate.cs" Link="ModelBoundApprovalGate.cs" />
   </ItemGroup>
   <ItemGroup>
