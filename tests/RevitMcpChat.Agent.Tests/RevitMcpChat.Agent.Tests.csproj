@@ -13,6 +13,9 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\RevitMcpChat.Contracts\RevitMcpChat.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\RevitMcpChat.Agent\RevitMcpChat.Agent.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="FakeMcpServer.ps1" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
-
