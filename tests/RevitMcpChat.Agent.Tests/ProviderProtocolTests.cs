@@ -19,6 +19,19 @@ namespace RevitMcpChat.Agent.Tests;
 public sealed class ProviderProtocolTests
 {
     [Fact]
+    public void OpenAiCompatibleRequiresExplicitBaseUrl()
+    {
+        using var client = new HttpClient(new FakeHttpHandler(_ => throw new InvalidOperationException("No request is expected.")));
+
+        var exception = Assert.Throws<ProviderRequestException>(() => ProviderFactory.Create(
+            Profile("openai-compatible", string.Empty, "local-model"),
+            new ResolvedCredential(CredentialSource.User, "custom-provider-secret"),
+            client));
+
+        Assert.Contains("base URL", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task DeepSeekUsesConfiguredBaseUrl()
     {
         var handler = new FakeHttpHandler(_ => Sse(

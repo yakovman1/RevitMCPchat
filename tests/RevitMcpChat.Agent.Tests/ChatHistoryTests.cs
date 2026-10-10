@@ -137,6 +137,31 @@ public sealed class ChatHistoryTests
         Assert.Contains("[REDACTED]", (await history.LoadAsync(chatId, CancellationToken.None)).Events.Single().Text);
     }
 
+    [Fact]
+    public async Task HistoryOmitsFencedAndUnfencedCSharpStatements()
+    {
+        using var temp = new TemporaryDirectory();
+        await using var history = new SqliteChatHistory(temp.Path);
+        var chatId = await history.CreateAsync("file:C:\\Project\\A.rvt", "openai", "gpt-test", CancellationToken.None);
+        const string fencedSource = "doc.Delete(new ElementId(123456));";
+        const string inlineSource = "document.Delete(elementId);";
+
+        await history.AppendAsync(chatId, new ChatEvent
+        {
+            Kind = "user",
+            Text = "Run this:\n```csharp\n" + fencedSource + "\n```\nThen review " + inlineSource
+        }, CancellationToken.None);
+
+        var stored = Assert.Single((await history.LoadAsync(chatId, CancellationToken.None)).Events).Text;
+        Assert.DoesNotContain(fencedSource, stored, StringComparison.Ordinal);
+        Assert.DoesNotContain(inlineSource, stored, StringComparison.Ordinal);
+        Assert.Contains("[code omitted]", stored, StringComparison.Ordinal);
+        SqliteConnection.ClearAllPools();
+        var databaseBytes = await File.ReadAllBytesAsync(history.DatabasePath);
+        Assert.Equal(-1, databaseBytes.AsSpan().IndexOf(Encoding.UTF8.GetBytes(fencedSource)));
+        Assert.Equal(-1, databaseBytes.AsSpan().IndexOf(Encoding.UTF8.GetBytes(inlineSource)));
+    }
+
     private sealed class TemporaryDirectory : IDisposable
     {
         public TemporaryDirectory() =>

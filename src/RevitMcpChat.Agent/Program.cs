@@ -209,7 +209,7 @@ internal static class Program
 
     private static async Task<int> HandleChatAsync(AgentWorkspace workspace, string[] args, int optionStart)
     {
-        if (!TryParseOptions(args, optionStart, out var options, out var parseError))
+        if (!ChatCommandOptions.TryParse(args, optionStart, out var options, out var parseError))
         {
             System.Console.Error.WriteLine(parseError);
             PrintUsage();
@@ -223,8 +223,11 @@ internal static class Program
             return 2;
         }
 
-        var modelIdentity = options.GetValueOrDefault("--model-identity")
-            ?? "revit-pid:" + revitPid.ToString(CultureInfo.InvariantCulture);
+        if (!ChatCommandOptions.TryResolveModelIdentity(options, out var modelIdentity))
+        {
+            System.Console.Error.WriteLine("--model-identity is required. Use the exact active model identity; a Revit PID does not identify a document.");
+            return 2;
+        }
         var chatIdValue = options.GetValueOrDefault("--chat-id");
         var isResuming = !string.IsNullOrWhiteSpace(chatIdValue);
         ChatTranscript? transcript = null;
@@ -357,6 +360,11 @@ internal static class Program
                 {
                     break;
                 }
+                catch (McpConnectionException exception)
+                {
+                    System.Console.Error.WriteLine(exception.Message);
+                    return 3;
+                }
             }
 
             return 0;
@@ -422,36 +430,6 @@ internal static class Program
         }
     }
 
-    private static bool TryParseOptions(
-        string[] args,
-        int startIndex,
-        out Dictionary<string, string?> options,
-        out string error)
-    {
-        options = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        error = string.Empty;
-        for (var index = startIndex; index < args.Length; index++)
-        {
-            var name = args[index];
-            if (name == "--console")
-            {
-                options[name] = null;
-                continue;
-            }
-
-            if (!name.StartsWith("--", StringComparison.Ordinal) || index + 1 >= args.Length
-                || args[index + 1].StartsWith("--", StringComparison.Ordinal))
-            {
-                error = "Invalid chat options.";
-                return false;
-            }
-
-            options[name] = args[++index];
-        }
-
-        return true;
-    }
-
     private static IAdminKeySource CreateAdminKeySource() => new EmptyAdminKeySource();
 
     private static void PrintUsage()
@@ -461,8 +439,8 @@ internal static class Program
             "  providers" + Environment.NewLine +
             "  settings set-key <provider>       Save a key protected for this Windows account" + Environment.NewLine +
             "  settings remove-key <provider>    Remove the user key and reveal build access if configured" + Environment.NewLine +
-            "  chat --revit-pid <pid> --provider <id> --model <id> [--base-url <url>] [--server-path <path>]" + Environment.NewLine +
-            "  chat --revit-pid <pid> --chat-id <id> [--model-identity <id>]  Resume a saved chat" + Environment.NewLine +
+            "  chat --revit-pid <pid> --model-identity <id> --provider <id> --model <id> [--base-url <url>] [--server-path <path>]" + Environment.NewLine +
+            "  chat --revit-pid <pid> --model-identity <id> --chat-id <id>  Resume a saved chat" + Environment.NewLine +
             "  history [--all]" + Environment.NewLine +
             "  open <chat-id>" + Environment.NewLine +
             "  --help");

@@ -48,9 +48,15 @@ public static class ProviderFactory
                 credential.Value,
                 GetParameter(profile, "scope") ?? "GIGACHAT_API_PERS",
                 timeProvider),
-            "openai" or "openai-compatible" => new OpenAiCompatibleProvider(
+            "openai" => new OpenAiCompatibleProvider(
                 httpClient,
                 UriFor(profile.BaseUrl, "https://api.openai.com/v1"),
+                credential.Value,
+                GetParameter(profile, "auth_scheme") ?? "Bearer",
+                GetParameter(profile, "auth_header") ?? "Authorization"),
+            "openai-compatible" => new OpenAiCompatibleProvider(
+                httpClient,
+                RequiredUri(profile.BaseUrl),
                 credential.Value,
                 GetParameter(profile, "auth_scheme") ?? "Bearer",
                 GetParameter(profile, "auth_header") ?? "Authorization"),
@@ -76,6 +82,17 @@ public static class ProviderFactory
         }
 
         return uri;
+    }
+
+    private static Uri RequiredUri(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ProviderRequestException(
+                "The openai-compatible provider requires an explicit base URL; no request was sent.");
+        }
+
+        return UriFor(value, string.Empty);
     }
 
     private static string? GetParameter(ProviderProfile profile, string name)

@@ -22,12 +22,12 @@ Supported provider IDs include `openai`, `anthropic`, `gemini`, `deepseek`, `yan
 dotnet run --project src/RevitMcpChat.Agent -- settings remove-key openai
 ```
 
-Start a new chat. For OpenAI-compatible endpoints, provide the endpoint and model. Built-in provider endpoints are used when `--base-url` is omitted. Yandex AI Studio also needs `--folder-id`:
+Start a new chat. Every console chat requires a model identity because a Revit process can have more than one document open. Use the identity supplied by the Revit panel or, for a saved model, its canonical `file:` identity. For OpenAI-compatible endpoints, provide the endpoint and model. Yandex AI Studio also needs `--folder-id`:
 
 ```powershell
-dotnet run --project src/RevitMcpChat.Agent -- chat --revit-pid 1234 --provider openai --model gpt-4o
-dotnet run --project src/RevitMcpChat.Agent -- chat --revit-pid 1234 --provider openai-compatible --model local-model --base-url http://localhost:1234/v1
-dotnet run --project src/RevitMcpChat.Agent -- chat --revit-pid 1234 --provider yandex-ai-studio --model yandexgpt --folder-id your-folder-id
+dotnet run --project src/RevitMcpChat.Agent -- chat --revit-pid 1234 --model-identity "file:C:\MODELS\HOUSE.RVT" --provider openai --model gpt-4o
+dotnet run --project src/RevitMcpChat.Agent -- chat --revit-pid 1234 --model-identity "file:C:\MODELS\HOUSE.RVT" --provider openai-compatible --model local-model --base-url http://localhost:1234/v1
+dotnet run --project src/RevitMcpChat.Agent -- chat --revit-pid 1234 --model-identity "file:C:\MODELS\HOUSE.RVT" --provider yandex-ai-studio --model yandexgpt --folder-id your-folder-id
 ```
 
 The agent starts `rvt-mcp` for the selected Revit process. Changes still require approval. Use `/exit` to close the chat; its ID is printed when the session starts.
@@ -40,13 +40,15 @@ dotnet run --project src/RevitMcpChat.Agent -- history --all
 dotnet run --project src/RevitMcpChat.Agent -- open <chat-id>
 ```
 
-Continue a saved chat while connected to the same model:
+Continue a saved chat while connected to the same model. Pass the same model identity and confirm it belongs to the active Revit document; the console does not infer document identity from the process ID:
 
 ```powershell
-dotnet run --project src/RevitMcpChat.Agent -- chat --revit-pid 1234 --chat-id <chat-id>
+dotnet run --project src/RevitMcpChat.Agent -- chat --revit-pid 1234 --model-identity "file:C:\MODELS\HOUSE.RVT" --chat-id <chat-id>
 ```
 
-The console's default model identity is scoped to the Revit process ID. If the Revit process was restarted, pass the saved identity with `--model-identity` only when you have confirmed it is the same model. The Revit panel will provide the document identity directly so its history survives Revit process restarts and remains separated after Save As.
+The console requires `--model-identity` on every chat because a process ID does not identify a Revit document. Unknown chat options are rejected. The Revit panel will supply the document identity from the Revit API so its history survives Revit process restarts and remains separated after Save As.
+
+History stores complete user and assistant text after a turn finishes, but omits streaming deltas. When a turn invokes `revit_send_code_to_revit`, its user and assistant text is replaced with a privacy placeholder, and the C# call body is never written to SQLite. Fenced code and common inline Revit C# statements are also redacted when written directly to history.
 
 Run the checks:
 

@@ -80,7 +80,20 @@ public sealed class ChatEngine
 
             previousEvents = transcript.Events;
         }
-        var advertisedTools = await _mcp.ListToolsAsync(cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<McpToolDescriptor> advertisedTools;
+        try
+        {
+            advertisedTools = await _mcp.ListToolsAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            throw new McpConnectionException();
+        }
+
         var selectedTools = ToolCatalogSelector.Select(request.UserText, advertisedTools);
         var selectedByName = selectedTools.ToDictionary(tool => tool.Name, StringComparer.Ordinal);
         var messages = new List<ProviderMessage>
@@ -90,127 +103,181 @@ public sealed class ChatEngine
         messages.AddRange(BuildPreviousMessages(previousEvents));
         messages.Add(ProviderMessage.User(request.UserText));
 
-        await PublishAsync(eventSink, request.ConversationId, "user", request.UserText, cancellationToken)
-            .ConfigureAwait(false);
-
-        for (var round = 0; round < MaximumToolRounds; round++)
+        var turnEvents = new List<ChatEvent>();
+        var containsExecutableCode = false;
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var providerRequest = new ProviderRequest(request.ModelId, messages.ToArray(), selectedTools);
-            var assistantText = new StringBuilder();
-            var toolCalls = new List<ProviderToolCall>();
+            await PublishAsync(
+                eventSink,
+                request.ConversationId,
+                "user",
+                request.UserText,
+                cancellationToken,
+                historyBuffer: turnEvents).ConfigureAwait(false);
 
-            await foreach (var item in _provider.StreamAsync(providerRequest, cancellationToken)
-                .WithCancellation(cancellationToken)
-                .ConfigureAwait(false))
-            {
-                switch (item)
-                {
-                    case ProviderTextDeltaEvent textDelta:
-                        assistantText.Append(textDelta.Text);
-                        await PublishAsync(eventSink, request.ConversationId, "assistant_delta", textDelta.Text, cancellationToken)
-                            .ConfigureAwait(false);
-                        break;
-                    case ProviderToolCallEvent toolCall:
-                        toolCalls.Add(new ProviderToolCall(toolCall.CallId, toolCall.Name, toolCall.ArgumentsJson));
-                        break;
-                }
-            }
-
-            if (toolCalls.Count == 0)
-            {
-                await PublishAsync(eventSink, request.ConversationId, "assistant_complete", assistantText.ToString(), cancellationToken)
-                    .ConfigureAwait(false);
-                return;
-            }
-
-            messages.Add(ProviderMessage.Assistant(assistantText.ToString(), toolCalls));
-
-            foreach (var toolCall in toolCalls)
+            for (var round = 0; round < MaximumToolRounds; round++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                await PublishAsync(
-                    eventSink,
-                    request.ConversationId,
-                    "tool_call",
-                    toolCall.ArgumentsJson,
-                    cancellationToken,
-                    toolCall.CallId,
-                    toolCall.Name).ConfigureAwait(false);
+                var providerRequest = new ProviderRequest(request.ModelId, messages.ToArray(), selectedTools);
+                var assistantText = new StringBuilder();
+                var toolCalls = new List<ProviderToolCall>();
 
-                if (!selectedByName.TryGetValue(toolCall.Name, out var descriptor))
+                await foreach (var item in _provider.StreamAsync(providerRequest, cancellationToken)
+                    .WithCancellation(cancellationToken)
+                    .ConfigureAwait(false))
                 {
-                    var unavailable = "The model requested a tool that was not included in the advertised catalog. No MCP call was made.";
-                    await PublishAsync(eventSink, request.ConversationId, "tool_rejected", unavailable, cancellationToken, toolCall.CallId, toolCall.Name)
-                        .ConfigureAwait(false);
-                    messages.Add(ProviderMessage.ToolResult(toolCall.CallId, toolCall.Name, unavailable));
-                    continue;
-                }
-
-                if (!ToolArgumentValidator.TryValidate(descriptor, toolCall.ArgumentsJson, out var validationError))
-                {
-                    await PublishAsync(eventSink, request.ConversationId, "tool_arguments_rejected", validationError, cancellationToken, toolCall.CallId, toolCall.Name)
-                        .ConfigureAwait(false);
-                    messages.Add(ProviderMessage.ToolResult(toolCall.CallId, toolCall.Name, validationError));
-                    continue;
-                }
-
-                if (_toolPolicy.RequiresApproval(descriptor))
-                {
-                    var approval = new ToolApprovalRequest
+                    switch (item)
                     {
-                        CallId = toolCall.CallId,
-                        ToolName = toolCall.Name,
-                        ArgumentsJson = toolCall.ArgumentsJson,
-                        Summary = ApprovalSummary(descriptor, toolCall.ArgumentsJson),
-                        IsCode = string.Equals(toolCall.Name, "revit_send_code_to_revit", StringComparison.OrdinalIgnoreCase)
-                    };
-
-                    var approved = await eventSink.RequestApprovalAsync(approval, cancellationToken).ConfigureAwait(false);
-                    await PublishAsync(
-                        eventSink,
-                        request.ConversationId,
-                        "tool_approval",
-                        approved ? "approved" : "rejected",
-                        cancellationToken,
-                        toolCall.CallId,
-                        toolCall.Name).ConfigureAwait(false);
-                    if (!approved)
-                    {
-                        const string rejected = "The user rejected this tool call. Do not perform the requested change.";
-                        await PublishAsync(eventSink, request.ConversationId, "tool_rejected", rejected, cancellationToken, toolCall.CallId, toolCall.Name)
-                            .ConfigureAwait(false);
-                        messages.Add(ProviderMessage.ToolResult(toolCall.CallId, toolCall.Name, rejected));
-                        continue;
+                        case ProviderTextDeltaEvent textDelta:
+                            assistantText.Append(textDelta.Text);
+                            await PublishAsync(
+                                eventSink,
+                                request.ConversationId,
+                                "assistant_delta",
+                                textDelta.Text,
+                                cancellationToken,
+                                historyBuffer: turnEvents).ConfigureAwait(false);
+                            break;
+                        case ProviderToolCallEvent toolCall:
+                            toolCalls.Add(new ProviderToolCall(toolCall.CallId, toolCall.Name, toolCall.ArgumentsJson));
+                            break;
                     }
                 }
 
-                await PublishAsync(eventSink, request.ConversationId, "tool_running", toolCall.Name, cancellationToken, toolCall.CallId, toolCall.Name)
-                    .ConfigureAwait(false);
-                var outcome = await _mcp.CallToolAsync(toolCall.Name, toolCall.ArgumentsJson, cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (outcome.OutcomeUnknown)
+                if (toolCalls.Count == 0)
                 {
-                    await PublishAsync(eventSink, request.ConversationId, "tool_outcome_unknown", outcome.Content, CancellationToken.None, toolCall.CallId, toolCall.Name)
-                        .ConfigureAwait(false);
+                    await PublishAsync(
+                        eventSink,
+                        request.ConversationId,
+                        "assistant_complete",
+                        assistantText.ToString(),
+                        cancellationToken,
+                        historyBuffer: turnEvents).ConfigureAwait(false);
                     return;
                 }
 
-                var eventKind = outcome.IsError ? "tool_error" : "tool_result";
-                await PublishAsync(eventSink, request.ConversationId, eventKind, outcome.Content, cancellationToken, toolCall.CallId, toolCall.Name)
-                    .ConfigureAwait(false);
-                messages.Add(ProviderMessage.ToolResult(toolCall.CallId, toolCall.Name, outcome.Content));
+                messages.Add(ProviderMessage.Assistant(assistantText.ToString(), toolCalls));
+
+                foreach (var toolCall in toolCalls)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (string.Equals(toolCall.Name, "revit_send_code_to_revit", StringComparison.OrdinalIgnoreCase))
+                    {
+                        containsExecutableCode = true;
+                    }
+
+                    await PublishAsync(
+                        eventSink,
+                        request.ConversationId,
+                        "tool_call",
+                        toolCall.ArgumentsJson,
+                        cancellationToken,
+                        toolCall.CallId,
+                        toolCall.Name,
+                        turnEvents).ConfigureAwait(false);
+
+                    if (!selectedByName.TryGetValue(toolCall.Name, out var descriptor))
+                    {
+                        var unavailable = "The model requested a tool that was not included in the advertised catalog. No MCP call was made.";
+                        await PublishAsync(eventSink, request.ConversationId, "tool_rejected", unavailable, cancellationToken, toolCall.CallId, toolCall.Name, turnEvents)
+                            .ConfigureAwait(false);
+                        messages.Add(ProviderMessage.ToolResult(toolCall.CallId, toolCall.Name, unavailable));
+                        continue;
+                    }
+
+                    if (!ToolArgumentValidator.TryValidate(descriptor, toolCall.ArgumentsJson, out var validationError))
+                    {
+                        await PublishAsync(eventSink, request.ConversationId, "tool_arguments_rejected", validationError, cancellationToken, toolCall.CallId, toolCall.Name, turnEvents)
+                            .ConfigureAwait(false);
+                        messages.Add(ProviderMessage.ToolResult(toolCall.CallId, toolCall.Name, validationError));
+                        continue;
+                    }
+
+                    if (_toolPolicy.RequiresApproval(descriptor))
+                    {
+                        var approval = new ToolApprovalRequest
+                        {
+                            CallId = toolCall.CallId,
+                            ToolName = toolCall.Name,
+                            ArgumentsJson = toolCall.ArgumentsJson,
+                            Summary = ApprovalSummary(descriptor, toolCall.ArgumentsJson),
+                            IsCode = string.Equals(toolCall.Name, "revit_send_code_to_revit", StringComparison.OrdinalIgnoreCase)
+                        };
+
+                        var approved = await eventSink.RequestApprovalAsync(approval, cancellationToken).ConfigureAwait(false);
+                        await PublishAsync(
+                            eventSink,
+                            request.ConversationId,
+                            "tool_approval",
+                            approved ? "approved" : "rejected",
+                            cancellationToken,
+                            toolCall.CallId,
+                            toolCall.Name,
+                            turnEvents).ConfigureAwait(false);
+                        if (!approved)
+                        {
+                            const string rejected = "The user rejected this tool call. Do not perform the requested change.";
+                            await PublishAsync(eventSink, request.ConversationId, "tool_rejected", rejected, cancellationToken, toolCall.CallId, toolCall.Name, turnEvents)
+                                .ConfigureAwait(false);
+                            messages.Add(ProviderMessage.ToolResult(toolCall.CallId, toolCall.Name, rejected));
+                            continue;
+                        }
+                    }
+
+                    await PublishAsync(eventSink, request.ConversationId, "tool_running", toolCall.Name, cancellationToken, toolCall.CallId, toolCall.Name, turnEvents)
+                        .ConfigureAwait(false);
+                    var outcome = await _mcp.CallToolAsync(toolCall.Name, toolCall.ArgumentsJson, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (outcome.OutcomeUnknown)
+                    {
+                        await PublishAsync(eventSink, request.ConversationId, "tool_outcome_unknown", outcome.Content, CancellationToken.None, toolCall.CallId, toolCall.Name, turnEvents)
+                            .ConfigureAwait(false);
+                        return;
+                    }
+
+                    var eventKind = outcome.IsError ? "tool_error" : "tool_result";
+                    await PublishAsync(eventSink, request.ConversationId, eventKind, outcome.Content, cancellationToken, toolCall.CallId, toolCall.Name, turnEvents)
+                        .ConfigureAwait(false);
+                    messages.Add(ProviderMessage.ToolResult(toolCall.CallId, toolCall.Name, outcome.Content));
+                }
             }
+
+            await PublishAsync(
+                eventSink,
+                request.ConversationId,
+                "turn_limit_reached",
+                "The model reached the maximum number of tool rounds. Send a new message to continue.",
+                cancellationToken,
+                historyBuffer: turnEvents).ConfigureAwait(false);
+        }
+        finally
+        {
+            await PersistTurnHistoryAsync(turnEvents, containsExecutableCode).ConfigureAwait(false);
+        }
+    }
+
+    private async Task PersistTurnHistoryAsync(IReadOnlyList<ChatEvent> events, bool containsExecutableCode)
+    {
+        if (_history is null)
+        {
+            return;
         }
 
-        await PublishAsync(
-            eventSink,
-            request.ConversationId,
-            "turn_limit_reached",
-            "The model reached the maximum number of tool rounds. Send a new message to continue.",
-            cancellationToken)
-            .ConfigureAwait(false);
+        foreach (var item in events)
+        {
+            var text = containsExecutableCode && item.Kind is "user" or "assistant_complete" or "turn_limit_reached"
+                ? "[Turn text omitted because it contains executable C# source.]"
+                : item.Text;
+            await _history.AppendAsync(item.ConversationId, new ChatEvent
+            {
+                ConversationId = item.ConversationId,
+                Kind = item.Kind,
+                Text = text,
+                CallId = item.CallId,
+                ToolName = item.ToolName
+            }, CancellationToken.None).ConfigureAwait(false);
+        }
     }
 
     private static string ApprovalSummary(McpToolDescriptor descriptor, string argumentsJson)
@@ -332,7 +399,8 @@ public sealed class ChatEngine
         string text,
         CancellationToken cancellationToken,
         string callId = "",
-        string toolName = "")
+        string toolName = "",
+        List<ChatEvent>? historyBuffer = null)
     {
         var chatEvent = new ChatEvent
         {
@@ -343,9 +411,16 @@ public sealed class ChatEngine
             ToolName = toolName
         };
         await eventSink.PublishAsync(chatEvent, cancellationToken).ConfigureAwait(false);
-        if (_history is not null)
+        if (_history is not null && !string.Equals(kind, "assistant_delta", StringComparison.Ordinal))
         {
-            await _history.AppendAsync(conversationId, chatEvent, cancellationToken).ConfigureAwait(false);
+            if (historyBuffer is not null)
+            {
+                historyBuffer.Add(chatEvent);
+            }
+            else
+            {
+                await _history.AppendAsync(conversationId, chatEvent, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 }

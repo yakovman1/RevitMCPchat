@@ -185,6 +185,21 @@ public sealed class ChatEngineTests
         Assert.All(provider.Requests[0].Tools, tool => Assert.Contains(tool.Name, advertisedNames));
     }
 
+    [Fact]
+    public async Task ToolListFailureIsReportedAsRecoverableMcpConnectionError()
+    {
+        var gateway = new FakeGateway { ListToolsException = new IOException("internal transport detail") };
+        var provider = new ScriptedProvider(new ProviderEvent[] { new ProviderTextDeltaEvent("unused") });
+        var sink = new FakeSink(approve: false);
+
+        var exception = await Assert.ThrowsAsync<McpConnectionException>(() =>
+            new ChatEngine(provider, gateway).RunAsync(Turn("What is in the model?"), sink, CancellationToken.None));
+
+        Assert.Contains("rvt-mcp", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("internal transport detail", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(provider.Requests);
+    }
+
     private static McpToolDescriptor Tool(string name, bool? readOnly) =>
         new(name, "Test tool " + name, "{\"type\":\"object\",\"properties\":{}}", readOnly);
 
@@ -223,18 +238,27 @@ public sealed class ChatEngineTests
 
     private sealed class FakeGateway : IMcpGateway
     {
+        public FakeGateway() { }
         public FakeGateway(params McpToolDescriptor[] tools) => Tools = tools;
 
-        public IReadOnlyList<McpToolDescriptor> Tools { get; }
+        public IReadOnlyList<McpToolDescriptor> Tools { get; } = Array.Empty<McpToolDescriptor>();
         public int CallCount { get; private set; }
         public McpCallOutcome CallOutcome { get; set; } = new("ok", isError: false, outcomeUnknown: false);
         public Action? BeforeCall { get; set; }
+        public Exception? ListToolsException { get; set; }
 
         public Task ConnectAsync(int revitPid, string serverPath, CancellationToken cancellationToken) =>
             Task.CompletedTask;
 
-        public Task<IReadOnlyList<McpToolDescriptor>> ListToolsAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(Tools);
+        public Task<IReadOnlyList<McpToolDescriptor>> ListToolsAsync(CancellationToken cancellationToken)
+        {
+            if (ListToolsException is not null)
+            {
+                throw ListToolsException;
+            }
+
+            return Task.FromResult(Tools);
+        }
 
         public Task<McpCallOutcome> CallToolAsync(string name, string argumentsJson, CancellationToken cancellationToken)
         {

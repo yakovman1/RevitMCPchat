@@ -162,6 +162,7 @@ public sealed class PersistedConsoleFlowTests
             var chatId = await workspace.CreateChatAsync(modelIdentity, CancellationToken.None);
             const string source = "doc.Delete(elementId);";
             const string arguments = "{\"code\":\"doc.Delete(elementId);\"}";
+            var userPrompt = "Run this C#:\n```csharp\n" + source + "\n```";
             var tool = new McpToolDescriptor(
                 "revit_send_code_to_revit",
                 "Execute C# in Revit",
@@ -169,16 +170,32 @@ public sealed class PersistedConsoleFlowTests
                 true);
             var gateway = new FakeGateway(tool);
             var provider = new TwoRoundProvider(
-                new ProviderEvent[] { new ProviderToolCallEvent("call-code", tool.Name, arguments) },
-                new ProviderEvent[] { new ProviderTextDeltaEvent("The request was rejected.") });
+                new ProviderEvent[]
+                {
+                    new ProviderTextDeltaEvent(source),
+                    new ProviderToolCallEvent("call-code", tool.Name, arguments)
+                },
+                new ProviderEvent[]
+                {
+                    new ProviderTextDeltaEvent("The result was "),
+                    new ProviderTextDeltaEvent(source)
+                });
 
             await workspace.CreateChatEngine(provider, gateway)
-                .RunAsync(Request(chatId, modelIdentity, "openai", "gpt-test", "Delete the element"), new CollectingSink(), CancellationToken.None);
+                .RunAsync(Request(chatId, modelIdentity, "openai", "gpt-test", userPrompt), new CollectingSink(), CancellationToken.None);
 
             var transcript = await workspace.OpenChatAsync(chatId, CancellationToken.None);
             var storedCall = Assert.Single(transcript.Events, item => item.Kind == "tool_call");
             Assert.Equal("[C# source omitted]", storedCall.Text);
             Assert.DoesNotContain(source, storedCall.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain(transcript.Events, item => item.Kind == "assistant_delta");
+            Assert.Equal("[Turn text omitted because it contains executable C# source.]",
+                Assert.Single(transcript.Events, item => item.Kind == "user").Text);
+            Assert.Equal("[Turn text omitted because it contains executable C# source.]",
+                Assert.Single(transcript.Events, item => item.Kind == "assistant_complete").Text);
+            SqliteConnection.ClearAllPools();
+            var databaseBytes = await File.ReadAllBytesAsync(((SqliteChatHistory)workspace.History).DatabasePath);
+            Assert.Equal(-1, databaseBytes.AsSpan().IndexOf(System.Text.Encoding.UTF8.GetBytes(source)));
             Assert.Equal(0, gateway.CallCount);
         }
         finally

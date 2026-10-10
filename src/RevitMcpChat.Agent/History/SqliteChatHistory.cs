@@ -82,7 +82,7 @@ public sealed class SqliteChatHistory : IChatHistory, IAsyncDisposable
         var toolName = chatEvent.ToolName ?? string.Empty;
         var text = string.Equals(toolName, "revit_send_code_to_revit", StringComparison.OrdinalIgnoreCase)
             ? "[C# source omitted]"
-            : _redactor.Redact(chatEvent.Text ?? string.Empty);
+            : TranscriptTextRedactor.Redact(_redactor.Redact(chatEvent.Text ?? string.Empty));
         var now = UtcNow();
 
         using var connection = OpenConnection();
