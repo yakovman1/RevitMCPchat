@@ -299,6 +299,32 @@ public sealed class SqliteChatHistory : IChatHistory, IAsyncDisposable
         throw new InvalidOperationException("Only chats for an unsaved model can be rebound.");
     }
 
+    public Task BindUnsavedModelAsync(
+        string unsavedModelIdentity,
+        string savedModelIdentity,
+        CancellationToken cancellationToken)
+    {
+        RequireText(unsavedModelIdentity, nameof(unsavedModelIdentity));
+        RequireText(savedModelIdentity, nameof(savedModelIdentity));
+        if (!unsavedModelIdentity.StartsWith("unsaved:", StringComparison.Ordinal)
+            || !savedModelIdentity.StartsWith("file:", StringComparison.Ordinal))
+        {
+            throw new ArgumentException("A model binding must move from an unsaved identity to a saved identity.");
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+            UPDATE chats SET model_identity = $savedIdentity, updated_utc = $now
+            WHERE model_identity = $unsavedIdentity;";
+        command.Parameters.AddWithValue("$savedIdentity", savedModelIdentity);
+        command.Parameters.AddWithValue("$unsavedIdentity", unsavedModelIdentity);
+        command.Parameters.AddWithValue("$now", UtcNow());
+        command.ExecuteNonQuery();
+        return Task.CompletedTask;
+    }
+
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     private SqliteConnection OpenConnection()

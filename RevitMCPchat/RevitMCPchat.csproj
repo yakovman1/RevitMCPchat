@@ -14,6 +14,7 @@
     <RevitApiPackageVersion Condition="'$(RevitYear)' == '2024'">2024.3.60</RevitApiPackageVersion>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\src\RevitMcpChat.Contracts\RevitMcpChat.Contracts.csproj" />
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
     <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="$(RevitApiPackageVersion)" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="$(RevitApiPackageVersion)" ExcludeAssets="runtime" PrivateAssets="all" />

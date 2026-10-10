@@ -12,4 +12,5 @@ public interface IChatHistory
     Task RenameAsync(Guid chatId, string title, CancellationToken cancellationToken);
     Task DeleteAsync(Guid chatId, CancellationToken cancellationToken);
     Task BindUnsavedAsync(Guid chatId, string savedModelIdentity, CancellationToken cancellationToken);
+    Task BindUnsavedModelAsync(string unsavedModelIdentity, string savedModelIdentity, CancellationToken cancellationToken);
 }

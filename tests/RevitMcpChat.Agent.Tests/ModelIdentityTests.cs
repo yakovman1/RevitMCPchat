@@ -1,5 +1,5 @@
 using System;
-using RevitMcpChat.Agent.History;
+using RevitMcpChat.Contracts;
 using Xunit;
 
 namespace RevitMcpChat.Agent.Tests;

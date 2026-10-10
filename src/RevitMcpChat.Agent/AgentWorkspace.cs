@@ -2,6 +2,7 @@ using RevitMcpChat.Agent.Chat;
 using RevitMcpChat.Agent.History;
 using RevitMcpChat.Agent.Mcp;
 using RevitMcpChat.Agent.Settings;
+using RevitMcpChat.Contracts;
 
 namespace RevitMcpChat.Agent;
 
@@ -11,6 +12,7 @@ namespace RevitMcpChat.Agent;
 public sealed class AgentWorkspace : IAsyncDisposable
 {
     private readonly ISecretStore _secretStore;
+    private readonly IAdminKeySource _adminKeySource;
     private readonly CredentialResolver _credentialResolver;
     private readonly SettingsRepository _settings;
     private readonly SqliteChatHistory _history;
@@ -25,9 +27,10 @@ public sealed class AgentWorkspace : IAsyncDisposable
         _history = new SqliteChatHistory(localApplicationDataPath, _redactor);
         _settings = new SettingsRepository(localApplicationDataPath);
         _secretStore = secretStore ?? new DpapiSecretStore(localApplicationDataPath);
+        _adminKeySource = adminKeySource ?? new EmptyAdminKeySource();
         _credentialResolver = new CredentialResolver(
             _secretStore,
-            adminKeySource ?? new EmptyAdminKeySource());
+            _adminKeySource);
     }
 
     public IChatHistory History => _history;
@@ -37,6 +40,22 @@ public sealed class AgentWorkspace : IAsyncDisposable
 
     public Task SaveSettingsAsync(AppSettings settings, CancellationToken cancellationToken = default) =>
         _settings.SaveAsync(settings, cancellationToken);
+
+    public async Task<CredentialAvailability> GetCredentialAvailabilityAsync(
+        string providerId,
+        CancellationToken cancellationToken = default)
+    {
+        var userKey = await _secretStore.LoadAsync(providerId, cancellationToken).ConfigureAwait(false);
+        var hasUserKey = !string.IsNullOrWhiteSpace(userKey);
+        var hasAdminKey = !string.IsNullOrWhiteSpace(_adminKeySource.GetKey(providerId));
+        return new CredentialAvailability
+        {
+            ProviderId = providerId,
+            HasUserKey = hasUserKey,
+            HasAdminKey = hasAdminKey,
+            EffectiveSource = hasUserKey ? "user" : hasAdminKey ? "admin" : "missing"
+        };
+    }
 
     public async Task SetActiveProviderAsync(
         ProviderProfile profile,
@@ -115,6 +134,21 @@ public sealed class AgentWorkspace : IAsyncDisposable
 
     public Task<ChatTranscript> OpenChatAsync(Guid chatId, CancellationToken cancellationToken = default) =>
         _history.LoadAsync(chatId, cancellationToken);
+
+    public async Task BindUnsavedModelAsync(
+        string unsavedModelIdentity,
+        string savedModelIdentity,
+        CancellationToken cancellationToken = default)
+    {
+        await _history.BindUnsavedModelAsync(unsavedModelIdentity, savedModelIdentity, cancellationToken)
+            .ConfigureAwait(false);
+        var settings = await _settings.LoadAsync(cancellationToken).ConfigureAwait(false);
+        if (string.Equals(settings.LastModelIdentity, unsavedModelIdentity, StringComparison.Ordinal))
+        {
+            settings.LastModelIdentity = savedModelIdentity;
+            await _settings.SaveAsync(settings, cancellationToken).ConfigureAwait(false);
+        }
+    }
 
     public async Task<ProviderProfile> GetProfileForChatAsync(
         Guid chatId,

@@ -12,6 +12,14 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.0.1" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\RevitMcpChat.Contracts\RevitMcpChat.Contracts.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\..\RevitMCPchat\Agent\AgentPipeClient.cs" Link="AgentPipeClient.cs" />
+    <Compile Include="..\..\RevitMCPchat\Agent\AgentProcessHost.cs" Link="AgentProcessHost.cs" />
+    <Compile Include="..\..\src\RevitMcpChat.Agent\Ipc\ModelBoundApprovalGate.cs" Link="ModelBoundApprovalGate.cs" />
+  </ItemGroup>
+  <ItemGroup>
     <None Include="..\..\packaging\RevitMcpChat.addin.template" Link="RevitMcpChat.addin.template" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\packaging\RevitMcpChat.addin.template')" />
   </ItemGroup>
 </Project>

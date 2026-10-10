@@ -1,6 +1,7 @@
 using System.Globalization;
 using RevitMcpChat.Agent.Console;
 using RevitMcpChat.Agent.History;
+using RevitMcpChat.Agent.Ipc;
 using RevitMcpChat.Agent.Mcp;
 using RevitMcpChat.Agent.Providers;
 using RevitMcpChat.Agent.Settings;
@@ -23,6 +24,11 @@ internal static class Program
         try
         {
             var command = args[0];
+            if (string.Equals(command, "agent", StringComparison.OrdinalIgnoreCase))
+            {
+                return await RunPipeAgentAsync(workspace, args).ConfigureAwait(false);
+            }
+
             if (string.Equals(command, "providers", StringComparison.OrdinalIgnoreCase))
             {
                 return await ListProvidersAsync(workspace).ConfigureAwait(false);
@@ -84,6 +90,32 @@ internal static class Program
             System.Console.Error.WriteLine(exception.Message);
             return 2;
         }
+    }
+
+    private static async Task<int> RunPipeAgentAsync(AgentWorkspace workspace, string[] args)
+    {
+        if (args.Length != 5
+            || !string.Equals(args[1], "--revit-pid", StringComparison.Ordinal)
+            || !int.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out var revitPid)
+            || revitPid <= 0
+            || !string.Equals(args[3], "--pipe-name", StringComparison.Ordinal))
+        {
+            System.Console.Error.WriteLine("Agent mode requires --revit-pid <pid> --pipe-name <name>.");
+            return 2;
+        }
+
+        var pipeName = args[4];
+        if (!string.Equals(pipeName, AgentPipeNames.ForRevitPid(revitPid), StringComparison.Ordinal))
+        {
+            System.Console.Error.WriteLine("The pipe name does not match the Revit process ID.");
+            return 2;
+        }
+
+        await using var server = new AgentPipeServer(
+            pipeName,
+            new AgentCommandDispatcher(workspace, revitPid));
+        await server.RunAsync(CancellationToken.None).ConfigureAwait(false);
+        return 0;
     }
 
     private static async Task<int> ListProvidersAsync(AgentWorkspace workspace)
@@ -443,6 +475,7 @@ internal static class Program
             "  chat --revit-pid <pid> --model-identity <id> --chat-id <id>  Resume a saved chat" + Environment.NewLine +
             "  history [--all]" + Environment.NewLine +
             "  open <chat-id>" + Environment.NewLine +
+            "  agent --revit-pid <pid> --pipe-name <name> (internal Revit session)" + Environment.NewLine +
             "  --help");
     }
 }
