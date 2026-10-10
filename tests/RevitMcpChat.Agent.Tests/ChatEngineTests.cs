@@ -147,23 +147,46 @@ public sealed class ChatEngineTests
     [Fact]
     public async Task CancellationDuringInterruptedWriteStillReportsUnknownOutcome()
     {
-        using var cancellation = new CancellationTokenSource();
-        var tool = Tool("revit_create_wall", readOnly: false);
-        var gateway = new FakeGateway(tool)
+        var temp = Path.Combine(Path.GetTempPath(), "RevitMcpChatCancelledWrite-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        try
         {
-            CallOutcome = new McpCallOutcome("connection interrupted", isError: true, outcomeUnknown: true),
-            BeforeCall = cancellation.Cancel
-        };
-        var provider = new ScriptedProvider(
-            new ProviderEvent[] { new ProviderToolCallEvent("write-cancelled", tool.Name, "{}") });
-        var sink = new FakeSink(approve: true, rejectCanceledPublish: true);
+            using var cancellation = new CancellationTokenSource();
+            var tool = Tool("revit_create_wall", readOnly: false);
+            var gateway = new FakeGateway(tool)
+            {
+                CallOutcome = new McpCallOutcome("connection interrupted", isError: true, outcomeUnknown: true),
+                BeforeCall = cancellation.Cancel
+            };
+            var provider = new ScriptedProvider(
+                new ProviderEvent[] { new ProviderToolCallEvent("write-cancelled", tool.Name, "{}") });
+            var sink = new FakeSink(approve: true, rejectCanceledPublish: true);
+            var request = Turn("Create a wall.");
 
-        await new ChatEngine(provider, gateway).RunAsync(
-            Turn("Create a wall."),
-            sink,
-            cancellation.Token);
+            await using (var history = new SqliteChatHistory(temp))
+            {
+                request.ConversationId = await history.CreateAsync(
+                    request.ModelIdentity,
+                    request.ProviderId,
+                    request.ModelId,
+                    CancellationToken.None);
 
-        Assert.Contains(sink.Events, item => item.Kind == "tool_outcome_unknown");
+                await new ChatEngine(provider, gateway, history: history).RunAsync(
+                    request,
+                    sink,
+                    cancellation.Token);
+
+                Assert.Contains(sink.Events, item => item.Kind == "tool_outcome_unknown");
+                Assert.Contains(
+                    (await history.LoadAsync(request.ConversationId, CancellationToken.None)).Events,
+                    item => item.Kind == "tool_outcome_unknown");
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(temp, recursive: true);
+        }
     }
     [Fact]
     public async Task CatalogOnlyContainsAdvertisedTools()
