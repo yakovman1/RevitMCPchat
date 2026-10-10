@@ -1,0 +1,15 @@
+.vs/
+**/bin/
+**/obj/
+*.user
+*.suo
+*.pdb
+*.snupkg
+*.nupkg
+packages/
+.env
+*.key
+*.pem
+admin-keys.json
+GeneratedAdminKeySource.cs
+.superpowers/sdd/

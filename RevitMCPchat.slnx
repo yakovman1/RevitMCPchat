@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="RevitMCPchat/RevitMCPchat.csproj" />
+  <Project Path="src/RevitMcpChat.Contracts/RevitMcpChat.Contracts.csproj" />
+  <Project Path="src/RevitMcpChat.Agent/RevitMcpChat.Agent.csproj" />
+  <Project Path="tests/RevitMcpChat.Agent.Tests/RevitMcpChat.Agent.Tests.csproj" />
+</Solution>
