@@ -9,5 +9,6 @@
   <ItemGroup>
     <ProjectReference Include="..\RevitMcpChat.Contracts\RevitMcpChat.Contracts.csproj" />
     <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
+    <PackageReference Include="JsonSchema.Net" Version="9.4.0" />
   </ItemGroup>
 </Project>
