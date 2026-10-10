@@ -103,8 +103,9 @@ public sealed class ChatEngine
         messages.AddRange(BuildPreviousMessages(previousEvents));
         messages.Add(ProviderMessage.User(request.UserText));
 
-        var turnEvents = new List<ChatEvent>();
+        var historyTurnId = Guid.NewGuid().ToString("N");
         var containsExecutableCode = false;
+        var userEventPersisted = false;
         try
         {
             await PublishAsync(
@@ -113,7 +114,9 @@ public sealed class ChatEngine
                 "user",
                 request.UserText,
                 cancellationToken,
-                historyBuffer: turnEvents).ConfigureAwait(false);
+                historyTextOverride: "[User message is being processed.]",
+                historyCallId: historyTurnId).ConfigureAwait(false);
+            userEventPersisted = _history is not null;
 
             for (var round = 0; round < MaximumToolRounds; round++)
             {
@@ -135,8 +138,7 @@ public sealed class ChatEngine
                                 request.ConversationId,
                                 "assistant_delta",
                                 textDelta.Text,
-                                cancellationToken,
-                                historyBuffer: turnEvents).ConfigureAwait(false);
+                                cancellationToken).ConfigureAwait(false);
                             break;
                         case ProviderToolCallEvent toolCall:
                             toolCalls.Add(new ProviderToolCall(toolCall.CallId, toolCall.Name, toolCall.ArgumentsJson));
@@ -152,7 +154,9 @@ public sealed class ChatEngine
                         "assistant_complete",
                         assistantText.ToString(),
                         cancellationToken,
-                        historyBuffer: turnEvents).ConfigureAwait(false);
+                        historyTextOverride: containsExecutableCode
+                            ? "[Turn text omitted because it contains executable C# source.]"
+                            : null).ConfigureAwait(false);
                     return;
                 }
 
@@ -173,13 +177,12 @@ public sealed class ChatEngine
                         toolCall.ArgumentsJson,
                         cancellationToken,
                         toolCall.CallId,
-                        toolCall.Name,
-                        turnEvents).ConfigureAwait(false);
+                        toolCall.Name).ConfigureAwait(false);
 
                     if (!selectedByName.TryGetValue(toolCall.Name, out var descriptor))
                     {
                         var unavailable = "The model requested a tool that was not included in the advertised catalog. No MCP call was made.";
-                        await PublishAsync(eventSink, request.ConversationId, "tool_rejected", unavailable, cancellationToken, toolCall.CallId, toolCall.Name, turnEvents)
+                        await PublishAsync(eventSink, request.ConversationId, "tool_rejected", unavailable, cancellationToken, toolCall.CallId, toolCall.Name)
                             .ConfigureAwait(false);
                         messages.Add(ProviderMessage.ToolResult(toolCall.CallId, toolCall.Name, unavailable));
                         continue;
@@ -187,7 +190,7 @@ public sealed class ChatEngine
 
                     if (!ToolArgumentValidator.TryValidate(descriptor, toolCall.ArgumentsJson, out var validationError))
                     {
-                        await PublishAsync(eventSink, request.ConversationId, "tool_arguments_rejected", validationError, cancellationToken, toolCall.CallId, toolCall.Name, turnEvents)
+                        await PublishAsync(eventSink, request.ConversationId, "tool_arguments_rejected", validationError, cancellationToken, toolCall.CallId, toolCall.Name)
                             .ConfigureAwait(false);
                         messages.Add(ProviderMessage.ToolResult(toolCall.CallId, toolCall.Name, validationError));
                         continue;
@@ -212,32 +215,31 @@ public sealed class ChatEngine
                             approved ? "approved" : "rejected",
                             cancellationToken,
                             toolCall.CallId,
-                            toolCall.Name,
-                            turnEvents).ConfigureAwait(false);
+                            toolCall.Name).ConfigureAwait(false);
                         if (!approved)
                         {
                             const string rejected = "The user rejected this tool call. Do not perform the requested change.";
-                            await PublishAsync(eventSink, request.ConversationId, "tool_rejected", rejected, cancellationToken, toolCall.CallId, toolCall.Name, turnEvents)
+                            await PublishAsync(eventSink, request.ConversationId, "tool_rejected", rejected, cancellationToken, toolCall.CallId, toolCall.Name)
                                 .ConfigureAwait(false);
                             messages.Add(ProviderMessage.ToolResult(toolCall.CallId, toolCall.Name, rejected));
                             continue;
                         }
                     }
 
-                    await PublishAsync(eventSink, request.ConversationId, "tool_running", toolCall.Name, cancellationToken, toolCall.CallId, toolCall.Name, turnEvents)
+                    await PublishAsync(eventSink, request.ConversationId, "tool_running", toolCall.Name, cancellationToken, toolCall.CallId, toolCall.Name)
                         .ConfigureAwait(false);
                     var outcome = await _mcp.CallToolAsync(toolCall.Name, toolCall.ArgumentsJson, cancellationToken)
                         .ConfigureAwait(false);
 
                     if (outcome.OutcomeUnknown)
                     {
-                        await PublishAsync(eventSink, request.ConversationId, "tool_outcome_unknown", outcome.Content, CancellationToken.None, toolCall.CallId, toolCall.Name, turnEvents)
+                        await PublishAsync(eventSink, request.ConversationId, "tool_outcome_unknown", outcome.Content, CancellationToken.None, toolCall.CallId, toolCall.Name)
                             .ConfigureAwait(false);
                         return;
                     }
 
                     var eventKind = outcome.IsError ? "tool_error" : "tool_result";
-                    await PublishAsync(eventSink, request.ConversationId, eventKind, outcome.Content, cancellationToken, toolCall.CallId, toolCall.Name, turnEvents)
+                    await PublishAsync(eventSink, request.ConversationId, eventKind, outcome.Content, CancellationToken.None, toolCall.CallId, toolCall.Name)
                         .ConfigureAwait(false);
                     messages.Add(ProviderMessage.ToolResult(toolCall.CallId, toolCall.Name, outcome.Content));
                 }
@@ -248,35 +250,22 @@ public sealed class ChatEngine
                 request.ConversationId,
                 "turn_limit_reached",
                 "The model reached the maximum number of tool rounds. Send a new message to continue.",
-                cancellationToken,
-                historyBuffer: turnEvents).ConfigureAwait(false);
+                cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            await PersistTurnHistoryAsync(turnEvents, containsExecutableCode).ConfigureAwait(false);
-        }
-    }
-
-    private async Task PersistTurnHistoryAsync(IReadOnlyList<ChatEvent> events, bool containsExecutableCode)
-    {
-        if (_history is null)
-        {
-            return;
-        }
-
-        foreach (var item in events)
-        {
-            var text = containsExecutableCode && item.Kind is "user" or "assistant_complete" or "turn_limit_reached"
-                ? "[Turn text omitted because it contains executable C# source.]"
-                : item.Text;
-            await _history.AppendAsync(item.ConversationId, new ChatEvent
+            if (userEventPersisted && _history is not null)
             {
-                ConversationId = item.ConversationId,
-                Kind = item.Kind,
-                Text = text,
-                CallId = item.CallId,
-                ToolName = item.ToolName
-            }, CancellationToken.None).ConfigureAwait(false);
+                var safeUserText = containsExecutableCode
+                    ? "[Turn text omitted because it contains executable C# source.]"
+                    : request.UserText;
+                await _history.ReplaceEventTextAsync(
+                    request.ConversationId,
+                    "user",
+                    historyTurnId,
+                    safeUserText,
+                    CancellationToken.None).ConfigureAwait(false);
+            }
         }
     }
 
@@ -400,7 +389,8 @@ public sealed class ChatEngine
         CancellationToken cancellationToken,
         string callId = "",
         string toolName = "",
-        List<ChatEvent>? historyBuffer = null)
+        string? historyTextOverride = null,
+        string? historyCallId = null)
     {
         var chatEvent = new ChatEvent
         {
@@ -413,14 +403,14 @@ public sealed class ChatEngine
         await eventSink.PublishAsync(chatEvent, cancellationToken).ConfigureAwait(false);
         if (_history is not null && !string.Equals(kind, "assistant_delta", StringComparison.Ordinal))
         {
-            if (historyBuffer is not null)
+            await _history.AppendAsync(conversationId, new ChatEvent
             {
-                historyBuffer.Add(chatEvent);
-            }
-            else
-            {
-                await _history.AppendAsync(conversationId, chatEvent, cancellationToken).ConfigureAwait(false);
-            }
+                ConversationId = chatEvent.ConversationId,
+                Kind = chatEvent.Kind,
+                Text = historyTextOverride ?? chatEvent.Text,
+                CallId = historyCallId ?? chatEvent.CallId,
+                ToolName = chatEvent.ToolName
+            }, cancellationToken).ConfigureAwait(false);
         }
     }
 }

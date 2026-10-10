@@ -80,9 +80,7 @@ public sealed class SqliteChatHistory : IChatHistory, IAsyncDisposable
         cancellationToken.ThrowIfCancellationRequested();
 
         var toolName = chatEvent.ToolName ?? string.Empty;
-        var text = string.Equals(toolName, "revit_send_code_to_revit", StringComparison.OrdinalIgnoreCase)
-            ? "[C# source omitted]"
-            : TranscriptTextRedactor.Redact(_redactor.Redact(chatEvent.Text ?? string.Empty));
+        var text = PrepareEventText(chatEvent, toolName);
         var now = UtcNow();
 
         using var connection = OpenConnection();
@@ -134,6 +132,31 @@ public sealed class SqliteChatHistory : IChatHistory, IAsyncDisposable
         }
 
         transaction.Commit();
+        return Task.CompletedTask;
+    }
+
+    public Task ReplaceEventTextAsync(
+        Guid chatId,
+        string kind,
+        string callId,
+        string text,
+        CancellationToken cancellationToken)
+    {
+        RequireText(kind, nameof(kind));
+        RequireText(callId, nameof(callId));
+        cancellationToken.ThrowIfCancellationRequested();
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE events SET text = $text WHERE chat_id = $chatId AND kind = $kind AND call_id = $callId;";
+        command.Parameters.AddWithValue("$text", TranscriptTextRedactor.Redact(_redactor.Redact(text)));
+        command.Parameters.AddWithValue("$chatId", chatId.ToString("D"));
+        command.Parameters.AddWithValue("$kind", kind);
+        command.Parameters.AddWithValue("$callId", callId);
+        if (command.ExecuteNonQuery() != 1)
+        {
+            throw new InvalidOperationException("The pending history event could not be updated.");
+        }
+
         return Task.CompletedTask;
     }
 
@@ -341,6 +364,24 @@ public sealed class SqliteChatHistory : IChatHistory, IAsyncDisposable
     };
 
     private static string UtcNow() => DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+
+    private string PrepareEventText(ChatEvent chatEvent, string toolName)
+    {
+        var text = _redactor.Redact(chatEvent.Text ?? string.Empty);
+        if (!string.Equals(toolName, "revit_send_code_to_revit", StringComparison.OrdinalIgnoreCase))
+        {
+            return TranscriptTextRedactor.Redact(text);
+        }
+
+        return chatEvent.Kind switch
+        {
+            "tool_call" => "[C# source omitted]",
+            "tool_result" => "[C# execution completed]",
+            "tool_error" => "[C# execution returned an error]",
+            "tool_outcome_unknown" => "[C# execution outcome unknown; inspect the Revit model before retrying.]",
+            _ => TranscriptTextRedactor.Redact(text)
+        };
+    }
 
     private static void RequireText(string value, string parameterName)
     {

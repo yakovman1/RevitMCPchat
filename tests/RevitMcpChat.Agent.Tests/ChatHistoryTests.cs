@@ -162,6 +162,49 @@ public sealed class ChatHistoryTests
         Assert.Equal(-1, databaseBytes.AsSpan().IndexOf(Encoding.UTF8.GetBytes(inlineSource)));
     }
 
+    [Fact]
+    public async Task SendCodeHistoryPreservesApprovalAndBriefOutcome()
+    {
+        using var temp = new TemporaryDirectory();
+        await using var history = new SqliteChatHistory(temp.Path);
+        var chatId = await history.CreateAsync("file:C:\\Project\\A.rvt", "openai", "gpt-test", CancellationToken.None);
+        const string source = "doc.Delete(new ElementId(123456));";
+
+        await history.AppendAsync(chatId, new ChatEvent
+        {
+            Kind = "tool_call",
+            ToolName = "revit_send_code_to_revit",
+            Text = "{\"code\":\"" + source + "\"}"
+        }, CancellationToken.None);
+        await history.AppendAsync(chatId, new ChatEvent
+        {
+            Kind = "tool_approval",
+            ToolName = "revit_send_code_to_revit",
+            Text = "approved"
+        }, CancellationToken.None);
+        await history.AppendAsync(chatId, new ChatEvent
+        {
+            Kind = "tool_result",
+            ToolName = "revit_send_code_to_revit",
+            Text = "Executed successfully: " + source
+        }, CancellationToken.None);
+        await history.AppendAsync(chatId, new ChatEvent
+        {
+            Kind = "tool_outcome_unknown",
+            ToolName = "revit_send_code_to_revit",
+            Text = "The response was lost after executing " + source
+        }, CancellationToken.None);
+
+        var events = (await history.LoadAsync(chatId, CancellationToken.None)).Events;
+        Assert.Equal("[C# source omitted]", events[0].Text);
+        Assert.Equal("approved", events[1].Text);
+        Assert.Equal("[C# execution completed]", events[2].Text);
+        Assert.Equal("[C# execution outcome unknown; inspect the Revit model before retrying.]", events[3].Text);
+        SqliteConnection.ClearAllPools();
+        var databaseBytes = await File.ReadAllBytesAsync(history.DatabasePath);
+        Assert.Equal(-1, databaseBytes.AsSpan().IndexOf(Encoding.UTF8.GetBytes(source)));
+    }
+
     private sealed class TemporaryDirectory : IDisposable
     {
         public TemporaryDirectory() =>

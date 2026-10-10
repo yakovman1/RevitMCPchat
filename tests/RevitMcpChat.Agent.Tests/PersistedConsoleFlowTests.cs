@@ -193,6 +193,7 @@ public sealed class PersistedConsoleFlowTests
                 Assert.Single(transcript.Events, item => item.Kind == "user").Text);
             Assert.Equal("[Turn text omitted because it contains executable C# source.]",
                 Assert.Single(transcript.Events, item => item.Kind == "assistant_complete").Text);
+            Assert.Equal("rejected", Assert.Single(transcript.Events, item => item.Kind == "tool_approval").Text);
             SqliteConnection.ClearAllPools();
             var databaseBytes = await File.ReadAllBytesAsync(((SqliteChatHistory)workspace.History).DatabasePath);
             Assert.Equal(-1, databaseBytes.AsSpan().IndexOf(System.Text.Encoding.UTF8.GetBytes(source)));

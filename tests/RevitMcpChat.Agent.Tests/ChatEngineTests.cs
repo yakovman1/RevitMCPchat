@@ -200,6 +200,34 @@ public sealed class ChatEngineTests
         Assert.Empty(provider.Requests);
     }
 
+    [Fact]
+    public async Task ApprovedWriteIsDurablyRecordedBeforeMcpSideEffectStarts()
+    {
+        var temp = Path.Combine(Path.GetTempPath(), "RevitMcpChatWriteAudit-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        await using var history = new SqliteChatHistory(temp);
+        var request = Turn("Create a wall.");
+        request.ConversationId = await history.CreateAsync(request.ModelIdentity, request.ProviderId, request.ModelId, CancellationToken.None);
+        var tool = Tool("revit_create_wall", readOnly: false);
+        var gateway = new FakeGateway(tool);
+        gateway.BeforeCall = () =>
+        {
+            var persisted = history.LoadAsync(request.ConversationId, CancellationToken.None).GetAwaiter().GetResult().Events;
+            Assert.Contains(persisted, item => item.Kind == "tool_call" && item.ToolName == tool.Name);
+            Assert.Contains(persisted, item => item.Kind == "tool_approval" && item.Text == "approved");
+            Assert.Contains(persisted, item => item.Kind == "tool_running" && item.ToolName == tool.Name);
+        };
+        var provider = new ScriptedProvider(
+            new ProviderEvent[] { new ProviderToolCallEvent("write-audit", tool.Name, "{}") },
+            new ProviderEvent[] { new ProviderTextDeltaEvent("Wall created.") });
+
+        await new ChatEngine(provider, gateway, history: history)
+            .RunAsync(request, new FakeSink(approve: true), CancellationToken.None);
+
+        var finalEvents = (await history.LoadAsync(request.ConversationId, CancellationToken.None)).Events;
+        Assert.Contains(finalEvents, item => item.Kind == "tool_result" && item.Text == "ok");
+    }
+
     private static McpToolDescriptor Tool(string name, bool? readOnly) =>
         new(name, "Test tool " + name, "{\"type\":\"object\",\"properties\":{}}", readOnly);
 
