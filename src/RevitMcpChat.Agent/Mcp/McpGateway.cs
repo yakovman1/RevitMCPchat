@@ -80,7 +80,7 @@ public sealed class McpGateway : IMcpGateway
         var tools = await client.ListToolsAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
         _advertisedTools = new HashSet<string>(tools.Select(tool => tool.Name), StringComparer.Ordinal);
 
-        return tools.Select(tool =>
+        var descriptors = tools.Select(tool =>
         {
             var schema = tool.ProtocolTool.InputSchema;
             var schemaJson = schema.ValueKind == JsonValueKind.Undefined ? "{}" : schema.GetRawText();
@@ -90,6 +90,8 @@ public sealed class McpGateway : IMcpGateway
                 schemaJson,
                 tool.ProtocolTool.Annotations?.ReadOnlyHint);
         }).ToArray();
+        RvtMcpCompatibility.EnsureCompatible(descriptors);
+        return descriptors;
     }
 
     public async Task<McpCallOutcome> CallToolAsync(string name, string argumentsJson, CancellationToken cancellationToken)

@@ -12,4 +12,6 @@ packages/
 *.pem
 admin-keys.json
 GeneratedAdminKeySource.cs
+packaging/artifacts/
+packaging/.build/
 .superpowers/sdd/

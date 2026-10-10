@@ -89,6 +89,10 @@ public sealed class ChatEngine
         {
             throw;
         }
+        catch (McpConnectionException)
+        {
+            throw;
+        }
         catch (Exception)
         {
             throw new McpConnectionException();

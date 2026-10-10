@@ -8,4 +8,9 @@ public sealed class McpConnectionException : Exception
         : base("Could not read the rvt-mcp tool list. Check the Revit connection, then restart the chat.")
     {
     }
+
+    public McpConnectionException(string message)
+        : base(message)
+    {
+    }
 }

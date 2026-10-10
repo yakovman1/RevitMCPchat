@@ -6,11 +6,17 @@
     <Nullable>enable</Nullable>
     <LangVersion>10.0</LangVersion>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(AdminKeySourcePath)' != ''">
+    <DefineConstants>$(DefineConstants);ADMIN_KEYS</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\RevitMcpChat.Contracts\RevitMcpChat.Contracts.csproj" />
     <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
     <PackageReference Include="JsonSchema.Net" Version="9.4.0" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.31" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(AdminKeySourcePath)' != ''">
+    <Compile Include="$(AdminKeySourcePath)" />
   </ItemGroup>
 </Project>

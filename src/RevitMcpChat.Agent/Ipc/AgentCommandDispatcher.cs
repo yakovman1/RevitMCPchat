@@ -303,19 +303,44 @@ public sealed class AgentCommandDispatcher : IAgentCommandDispatcher
             {
                 RevitPid = _revitPid,
                 IsConnected = false,
-                Message = "rvt-mcp was not found. Install it, then reconnect."
+                Message = RvtMcpCompatibility.MissingInstallGuidance
             }));
         }
 
-        await using var gateway = new McpGateway();
-        await gateway.ConnectAsync(_revitPid, serverPath, cancellationToken).ConfigureAwait(false);
-        var tools = await gateway.ListToolsAsync(cancellationToken).ConfigureAwait(false);
-        return Response(command.RequestId, AgentPayloadJson.Serialize(new AgentStatus
+        try
         {
-            RevitPid = _revitPid,
-            IsConnected = true,
-            Message = $"Connected to rvt-mcp for Revit PID {_revitPid}; {tools.Count} tools are available."
-        }));
+            await using var gateway = new McpGateway();
+            await gateway.ConnectAsync(_revitPid, serverPath, cancellationToken).ConfigureAwait(false);
+            var tools = await gateway.ListToolsAsync(cancellationToken).ConfigureAwait(false);
+            return Response(command.RequestId, AgentPayloadJson.Serialize(new AgentStatus
+            {
+                RevitPid = _revitPid,
+                IsConnected = true,
+                Message = $"Connected to rvt-mcp for Revit PID {_revitPid}; {tools.Count} tools are available."
+            }));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (McpConnectionException exception)
+        {
+            return Response(command.RequestId, AgentPayloadJson.Serialize(new AgentStatus
+            {
+                RevitPid = _revitPid,
+                IsConnected = false,
+                Message = exception.Message
+            }));
+        }
+        catch (Exception)
+        {
+            return Response(command.RequestId, AgentPayloadJson.Serialize(new AgentStatus
+            {
+                RevitPid = _revitPid,
+                IsConnected = false,
+                Message = $"Could not complete the rvt-mcp MCP handshake. Update or restart rvt-mcp from {RvtMcpCompatibility.ProjectUrl}, then reconnect."
+            }));
+        }
     }
 
     private async Task<AgentReply> ModelSavedAsync(AgentCommand command, CancellationToken cancellationToken)

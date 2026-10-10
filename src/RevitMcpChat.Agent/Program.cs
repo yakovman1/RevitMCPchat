@@ -24,6 +24,11 @@ internal static class Program
         try
         {
             var command = args[0];
+            if (string.Equals(command, "verify-mcp", StringComparison.OrdinalIgnoreCase))
+            {
+                return await VerifyMcpAsync(args).ConfigureAwait(false);
+            }
+
             if (string.Equals(command, "agent", StringComparison.OrdinalIgnoreCase))
             {
                 return await RunPipeAgentAsync(workspace, args).ConfigureAwait(false);
@@ -116,6 +121,41 @@ internal static class Program
             new AgentCommandDispatcher(workspace, revitPid));
         await server.RunAsync(CancellationToken.None).ConfigureAwait(false);
         return 0;
+    }
+
+    private static async Task<int> VerifyMcpAsync(string[] args)
+    {
+        if (args.Length != 5
+            || !string.Equals(args[1], "--revit-pid", StringComparison.Ordinal)
+            || !int.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out var revitPid)
+            || revitPid <= 0
+            || !string.Equals(args[3], "--server-path", StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(args[4]))
+        {
+            System.Console.Error.WriteLine("Use: verify-mcp --revit-pid <pid> --server-path <rvt-mcp.exe>");
+            return 2;
+        }
+
+        try
+        {
+            await using var gateway = new McpGateway();
+            await gateway.ConnectAsync(revitPid, args[4], CancellationToken.None).ConfigureAwait(false);
+            var tools = await gateway.ListToolsAsync(CancellationToken.None).ConfigureAwait(false);
+            RvtMcpCompatibility.EnsureCompatible(tools);
+            System.Console.WriteLine($"MCP handshake succeeded; {tools.Count} Revit tools are available.");
+            return 0;
+        }
+        catch (McpConnectionException exception)
+        {
+            System.Console.Error.WriteLine(exception.Message);
+            return 3;
+        }
+        catch (Exception)
+        {
+            System.Console.Error.WriteLine(
+                $"Could not complete the rvt-mcp MCP handshake for Revit PID {revitPid}. Update or reconnect rvt-mcp from {RvtMcpCompatibility.ProjectUrl}.");
+            return 3;
+        }
     }
 
     private static async Task<int> ListProvidersAsync(AgentWorkspace workspace)
@@ -462,13 +502,21 @@ internal static class Program
         }
     }
 
-    private static IAdminKeySource CreateAdminKeySource() => new EmptyAdminKeySource();
+    private static IAdminKeySource CreateAdminKeySource()
+    {
+#if ADMIN_KEYS
+        return new GeneratedAdminKeySource();
+#else
+        return new EmptyAdminKeySource();
+#endif
+    }
 
     private static void PrintUsage()
     {
         System.Console.WriteLine(
             "Revit MCP Chat local agent" + Environment.NewLine +
             "  providers" + Environment.NewLine +
+            "  verify-mcp --revit-pid <pid> --server-path <rvt-mcp.exe>" + Environment.NewLine +
             "  settings set-key <provider>       Save a key protected for this Windows account" + Environment.NewLine +
             "  settings remove-key <provider>    Remove the user key and reveal build access if configured" + Environment.NewLine +
             "  chat --revit-pid <pid> --model-identity <id> --provider <id> --model <id> [--base-url <url>] [--server-path <path>]" + Environment.NewLine +

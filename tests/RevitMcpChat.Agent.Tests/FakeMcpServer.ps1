@@ -1,3 +1,5 @@
+param([string]$ToolName = "revit_fake_test")
+
 while ($null -ne ($line = [Console]::In.ReadLine())) {
     $request = ConvertFrom-Json -InputObject $line
     if ($request.method -eq "server/discover") {
@@ -29,7 +31,7 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
             result = @{
                 tools = @(
                     @{
-                        name = "fake.test"
+                        name = $ToolName
                         description = "Fake MCP tool for transport tests"
                         inputSchema = @{
                             type = "object"
