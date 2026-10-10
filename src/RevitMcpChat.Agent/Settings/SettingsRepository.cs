@@ -7,6 +7,7 @@ public sealed class AppSettings
 {
     public string SelectedProviderId { get; set; } = "openai-compatible";
     public string SelectedModelId { get; set; } = string.Empty;
+    public string? LastModelIdentity { get; set; }
     public List<ProviderProfile> Providers { get; set; } = new();
 }
 

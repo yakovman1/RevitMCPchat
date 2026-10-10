@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using RevitMcpChat.Agent.History;
@@ -50,6 +51,7 @@ public sealed class ChatEngine
             throw new ArgumentException("A user message is required.", nameof(request));
         }
 
+        IReadOnlyList<ChatEvent> previousEvents = Array.Empty<ChatEvent>();
         if (_history is not null)
         {
             var transcript = await _history.LoadAsync(request.ConversationId, cancellationToken).ConfigureAwait(false);
@@ -63,15 +65,30 @@ public sealed class ChatEngine
                     cancellationToken).ConfigureAwait(false);
                 return;
             }
+
+            if (!string.Equals(transcript.ProviderId, request.ProviderId, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(transcript.ModelId, request.ModelId, StringComparison.Ordinal))
+            {
+                await PublishAsync(
+                    eventSink,
+                    request.ConversationId,
+                    "chat_provider_mismatch",
+                    "This chat is saved for a different provider or model. Open it with its saved provider and model, or start a new chat.",
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            previousEvents = transcript.Events;
         }
         var advertisedTools = await _mcp.ListToolsAsync(cancellationToken).ConfigureAwait(false);
         var selectedTools = ToolCatalogSelector.Select(request.UserText, advertisedTools);
         var selectedByName = selectedTools.ToDictionary(tool => tool.Name, StringComparer.Ordinal);
         var messages = new List<ProviderMessage>
         {
-            ProviderMessage.System(SystemPrompt),
-            ProviderMessage.User(request.UserText)
+            ProviderMessage.System(SystemPrompt)
         };
+        messages.AddRange(BuildPreviousMessages(previousEvents));
+        messages.Add(ProviderMessage.User(request.UserText));
 
         await PublishAsync(eventSink, request.ConversationId, "user", request.UserText, cancellationToken)
             .ConfigureAwait(false);
@@ -112,11 +129,19 @@ public sealed class ChatEngine
             foreach (var toolCall in toolCalls)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                await PublishAsync(
+                    eventSink,
+                    request.ConversationId,
+                    "tool_call",
+                    toolCall.ArgumentsJson,
+                    cancellationToken,
+                    toolCall.CallId,
+                    toolCall.Name).ConfigureAwait(false);
 
                 if (!selectedByName.TryGetValue(toolCall.Name, out var descriptor))
                 {
                     var unavailable = "The model requested a tool that was not included in the advertised catalog. No MCP call was made.";
-                    await PublishAsync(eventSink, request.ConversationId, "tool_rejected", unavailable, cancellationToken, toolCall.CallId)
+                    await PublishAsync(eventSink, request.ConversationId, "tool_rejected", unavailable, cancellationToken, toolCall.CallId, toolCall.Name)
                         .ConfigureAwait(false);
                     messages.Add(ProviderMessage.ToolResult(toolCall.CallId, toolCall.Name, unavailable));
                     continue;
@@ -124,7 +149,7 @@ public sealed class ChatEngine
 
                 if (!ToolArgumentValidator.TryValidate(descriptor, toolCall.ArgumentsJson, out var validationError))
                 {
-                    await PublishAsync(eventSink, request.ConversationId, "tool_arguments_rejected", validationError, cancellationToken, toolCall.CallId)
+                    await PublishAsync(eventSink, request.ConversationId, "tool_arguments_rejected", validationError, cancellationToken, toolCall.CallId, toolCall.Name)
                         .ConfigureAwait(false);
                     messages.Add(ProviderMessage.ToolResult(toolCall.CallId, toolCall.Name, validationError));
                     continue;
@@ -141,30 +166,39 @@ public sealed class ChatEngine
                         IsCode = string.Equals(toolCall.Name, "revit_send_code_to_revit", StringComparison.OrdinalIgnoreCase)
                     };
 
-                    if (!await eventSink.RequestApprovalAsync(approval, cancellationToken).ConfigureAwait(false))
+                    var approved = await eventSink.RequestApprovalAsync(approval, cancellationToken).ConfigureAwait(false);
+                    await PublishAsync(
+                        eventSink,
+                        request.ConversationId,
+                        "tool_approval",
+                        approved ? "approved" : "rejected",
+                        cancellationToken,
+                        toolCall.CallId,
+                        toolCall.Name).ConfigureAwait(false);
+                    if (!approved)
                     {
                         const string rejected = "The user rejected this tool call. Do not perform the requested change.";
-                        await PublishAsync(eventSink, request.ConversationId, "tool_rejected", rejected, cancellationToken, toolCall.CallId)
+                        await PublishAsync(eventSink, request.ConversationId, "tool_rejected", rejected, cancellationToken, toolCall.CallId, toolCall.Name)
                             .ConfigureAwait(false);
                         messages.Add(ProviderMessage.ToolResult(toolCall.CallId, toolCall.Name, rejected));
                         continue;
                     }
                 }
 
-                await PublishAsync(eventSink, request.ConversationId, "tool_running", toolCall.Name, cancellationToken, toolCall.CallId)
+                await PublishAsync(eventSink, request.ConversationId, "tool_running", toolCall.Name, cancellationToken, toolCall.CallId, toolCall.Name)
                     .ConfigureAwait(false);
                 var outcome = await _mcp.CallToolAsync(toolCall.Name, toolCall.ArgumentsJson, cancellationToken)
                     .ConfigureAwait(false);
 
                 if (outcome.OutcomeUnknown)
                 {
-                    await PublishAsync(eventSink, request.ConversationId, "tool_outcome_unknown", outcome.Content, CancellationToken.None, toolCall.CallId)
+                    await PublishAsync(eventSink, request.ConversationId, "tool_outcome_unknown", outcome.Content, CancellationToken.None, toolCall.CallId, toolCall.Name)
                         .ConfigureAwait(false);
                     return;
                 }
 
                 var eventKind = outcome.IsError ? "tool_error" : "tool_result";
-                await PublishAsync(eventSink, request.ConversationId, eventKind, outcome.Content, cancellationToken, toolCall.CallId)
+                await PublishAsync(eventSink, request.ConversationId, eventKind, outcome.Content, cancellationToken, toolCall.CallId, toolCall.Name)
                     .ConfigureAwait(false);
                 messages.Add(ProviderMessage.ToolResult(toolCall.CallId, toolCall.Name, outcome.Content));
             }
@@ -189,18 +223,129 @@ public sealed class ChatEngine
         return descriptor.Description;
     }
 
-    private static Task PublishAsync(
+    private static IReadOnlyList<ProviderMessage> BuildPreviousMessages(IReadOnlyList<ChatEvent> events)
+    {
+        var messages = new List<ProviderMessage>();
+        var pendingAssistantText = new StringBuilder();
+        var callsWithStoredArguments = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in events)
+        {
+            if (item.Kind == "user")
+            {
+                FlushAssistantText(messages, pendingAssistantText);
+                messages.Add(ProviderMessage.User(item.Text));
+            }
+            else if (item.Kind == "assistant_delta")
+            {
+                pendingAssistantText.Append(item.Text);
+            }
+            else if (item.Kind == "assistant_complete")
+            {
+                messages.Add(new ProviderMessage("assistant", item.Text));
+                pendingAssistantText.Clear();
+            }
+            else if (item.Kind == "turn_limit_reached")
+            {
+                FlushAssistantText(messages, pendingAssistantText);
+                messages.Add(new ProviderMessage("assistant", item.Text));
+            }
+            else if (item.Kind == "tool_call")
+            {
+                if (TryCreateStoredToolCall(item, out var toolCall))
+                {
+                    messages.Add(ProviderMessage.Assistant(pendingAssistantText.ToString(), new[] { toolCall }));
+                    callsWithStoredArguments.Add(item.CallId);
+                }
+                else
+                {
+                    var omittedDetails = string.Equals(
+                        item.ToolName,
+                        "revit_send_code_to_revit",
+                        StringComparison.OrdinalIgnoreCase)
+                        ? "[A previous C# code call was omitted from local history.]"
+                        : "[A previous tool call could not be reconstructed from local history.]";
+                    var summary = pendingAssistantText.ToString() + omittedDetails;
+                    messages.Add(new ProviderMessage("assistant", summary));
+                }
+
+                pendingAssistantText.Clear();
+            }
+            else if (item.Kind is "tool_result" or "tool_error" or "tool_rejected"
+                or "tool_arguments_rejected" or "tool_outcome_unknown")
+            {
+                if (callsWithStoredArguments.Remove(item.CallId))
+                {
+                    messages.Add(ProviderMessage.ToolResult(item.CallId, item.ToolName, item.Text));
+                }
+                else
+                {
+                    var label = string.IsNullOrWhiteSpace(item.ToolName) ? "Revit tool" : item.ToolName;
+                    messages.Add(ProviderMessage.User($"Previous {label} outcome ({item.Kind}): {item.Text}"));
+                }
+            }
+        }
+
+        FlushAssistantText(messages, pendingAssistantText);
+        return messages;
+    }
+
+    private static bool TryCreateStoredToolCall(ChatEvent item, out ProviderToolCall toolCall)
+    {
+        toolCall = null!;
+        if (string.IsNullOrWhiteSpace(item.ToolName) || string.IsNullOrWhiteSpace(item.CallId))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(item.Text);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            toolCall = new ProviderToolCall(item.CallId, item.ToolName, item.Text);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static void FlushAssistantText(List<ProviderMessage> messages, StringBuilder pendingAssistantText)
+    {
+        if (pendingAssistantText.Length == 0)
+        {
+            return;
+        }
+
+        messages.Add(new ProviderMessage("assistant", pendingAssistantText.ToString()));
+        pendingAssistantText.Clear();
+    }
+
+    private async Task PublishAsync(
         IChatEventSink eventSink,
         Guid conversationId,
         string kind,
         string text,
         CancellationToken cancellationToken,
-        string callId = "") =>
-        eventSink.PublishAsync(new ChatEvent
+        string callId = "",
+        string toolName = "")
+    {
+        var chatEvent = new ChatEvent
         {
             ConversationId = conversationId,
             Kind = kind,
             Text = text,
-            CallId = callId
-        }, cancellationToken);
+            CallId = callId,
+            ToolName = toolName
+        };
+        await eventSink.PublishAsync(chatEvent, cancellationToken).ConfigureAwait(false);
+        if (_history is not null)
+        {
+            await _history.AppendAsync(conversationId, chatEvent, cancellationToken).ConfigureAwait(false);
+        }
+    }
 }
