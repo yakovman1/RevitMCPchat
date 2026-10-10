@@ -71,6 +71,7 @@ public sealed class ChatMessageItem : ObservableViewModel
 public sealed class ChatViewModel : ObservableViewModel
 {
     private readonly IAgentCommandClient _client;
+    private readonly Func<CancellationToken, Task>? _ensureAgentRunning;
     private readonly SynchronizationContext? _uiContext;
     private ActiveModelInfo _activeModel = new();
     private ToolApprovalPrompt? _pendingApproval;
@@ -83,9 +84,12 @@ public sealed class ChatViewModel : ObservableViewModel
     private bool _isMcpConnected;
     private bool _isSending;
 
-    public ChatViewModel(IAgentCommandClient client)
+    public ChatViewModel(
+        IAgentCommandClient client,
+        Func<CancellationToken, Task>? ensureAgentRunning = null)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
+        _ensureAgentRunning = ensureAgentRunning;
         _uiContext = SynchronizationContext.Current;
         Messages = new ObservableCollection<ChatMessageItem>();
         NewChatCommand = new AsyncRelayCommand(() => NewChatAsync(), () => ActiveModel.IsOpen && !IsSending);
@@ -455,6 +459,16 @@ public sealed class ChatViewModel : ObservableViewModel
     {
         try
         {
+            if (_ensureAgentRunning is not null)
+            {
+                await _ensureAgentRunning(CancellationToken.None);
+            }
+
+            await _client.SendAsync(new AgentCommand
+            {
+                Kind = AgentCommandKinds.ModelActive,
+                PayloadJson = AgentPayloadJson.Serialize(ActiveModel)
+            }, CancellationToken.None);
             var reply = await _client.SendAsync(new AgentCommand { Kind = AgentCommandKinds.Reconnect }, CancellationToken.None);
             if (reply.Kind == AgentReplyKinds.Response)
             {

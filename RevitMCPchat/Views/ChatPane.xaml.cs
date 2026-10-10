@@ -16,7 +16,7 @@ public partial class ChatPane : Page, IDisposable
         InitializeComponent();
         if (RevitApp.PipeClient is not null)
         {
-            _viewModel = new ChatPaneViewModel(RevitApp.PipeClient);
+            _viewModel = new ChatPaneViewModel(RevitApp.PipeClient, RevitApp.EnsureAgentRunningAsync);
             DataContext = _viewModel;
             _viewModel.SetStartupGuidance(RevitApp.AgentStartupMessage);
         }

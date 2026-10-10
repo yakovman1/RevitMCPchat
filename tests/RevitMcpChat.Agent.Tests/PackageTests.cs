@@ -6,7 +6,10 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Data.Sqlite;
+using RevitMcpChat.Agent;
 using RevitMcpChat.Agent.Mcp;
+using RevitMcpChat.Agent.Settings;
 using Xunit;
 
 namespace RevitMcpChat.Agent.Tests;
@@ -32,6 +35,8 @@ public sealed class PackageTests : IClassFixture<PackageFixture>
     public void PackageContainsThreeYearManifests()
     {
         using var archive = ZipFile.OpenRead(_fixture.PublicPackagePath);
+        Assert.Contains(archive.Entries, entry =>
+            entry.FullName.Equals("docs/test-matrix.md", StringComparison.OrdinalIgnoreCase));
 
         foreach (var year in new[] { "2022", "2023", "2024" })
         {
@@ -95,9 +100,72 @@ public sealed class PackageTests : IClassFixture<PackageFixture>
     }
 
     [Fact]
+    public async Task PurgeRemovesKnownUserDataWithoutDeletingOtherInstallRootFiles()
+    {
+        var paths = _fixture.CreateInstallFixture();
+        await _fixture.RunPowerShellAsync(
+            Path.Combine(paths.PackageRoot, "install.ps1"),
+            "-PackageRoot", paths.PackageRoot,
+            "-InstallRoot", paths.InstallRoot,
+            "-AddinsRoot", paths.AddinsRoot,
+            "-RevitYears", "2022",
+            "-RvtMcpPath", Path.Combine(paths.Root, "missing", "rvt-mcp.exe"));
+
+        var localAppData = Path.Combine(paths.Root, "user-profile");
+        var userDataDirectory = Path.Combine(localAppData, "RevitMcpChat");
+        Directory.CreateDirectory(Path.Combine(userDataDirectory, "secrets"));
+        await File.WriteAllTextAsync(Path.Combine(userDataDirectory, "settings.json"), "settings");
+        await File.WriteAllTextAsync(Path.Combine(userDataDirectory, "history.sqlite3"), "history");
+        await File.WriteAllTextAsync(Path.Combine(userDataDirectory, "history.sqlite3-wal"), "wal");
+        await File.WriteAllTextAsync(Path.Combine(userDataDirectory, "secrets", "openai.dpapi"), "protected-key");
+        await File.WriteAllTextAsync(Path.Combine(userDataDirectory, "keep.txt"), "unrecognized user file");
+        var installRootSentinel = Path.Combine(paths.InstallRoot, "keep.txt");
+        await File.WriteAllTextAsync(installRootSentinel, "unrelated install-root file");
+
+        await _fixture.RunPowerShellWithLocalAppDataAsync(
+            Path.Combine(paths.PackageRoot, "uninstall.ps1"),
+            localAppData,
+            "-InstallRoot", paths.InstallRoot,
+            "-AddinsRoot", paths.AddinsRoot,
+            "-RevitYears", "2022",
+            "-Purge");
+
+        Assert.True(File.Exists(installRootSentinel));
+        Assert.True(File.Exists(Path.Combine(userDataDirectory, "keep.txt")));
+        Assert.False(File.Exists(Path.Combine(userDataDirectory, "settings.json")));
+        Assert.False(File.Exists(Path.Combine(userDataDirectory, "history.sqlite3")));
+        Assert.False(File.Exists(Path.Combine(userDataDirectory, "history.sqlite3-wal")));
+        Assert.False(Directory.Exists(Path.Combine(userDataDirectory, "secrets")));
+        Assert.False(File.Exists(Path.Combine(paths.InstallRoot, "agent", "RevitMcpChat.Agent.exe")));
+        Assert.False(File.Exists(Path.Combine(paths.AddinsRoot, "2022", "RevitMcpChat.addin")));
+    }
+
+    [Fact]
     public async Task PrivateBuildKeyIsNotWrittenToConfig()
     {
         const string disposableKey = "package-test-disposable-key-7f29";
+        var configRoot = Path.Combine(_fixture.Root, "private-config-profile");
+        Directory.CreateDirectory(configRoot);
+        await using (var workspace = new AgentWorkspace(
+            configRoot,
+            new DpapiSecretStore(configRoot),
+            new TestAdminKeySource(disposableKey)))
+        {
+            await workspace.SetActiveProviderAsync(new ProviderProfile
+            {
+                ProviderId = "openai",
+                DisplayName = "OpenAI",
+                ModelId = "gpt-5-mini"
+            });
+            var credential = await workspace.GetCredentialAvailabilityAsync("openai");
+            Assert.True(credential.HasAdminKey);
+            Assert.DoesNotContain(
+                disposableKey,
+                File.ReadAllText(Path.Combine(configRoot, "RevitMcpChat", "settings.json")),
+                StringComparison.Ordinal);
+        }
+        SqliteConnection.ClearAllPools();
+
         var privatePackage = await _fixture.GetPrivatePackageAsync(disposableKey);
         var extracted = Path.Combine(_fixture.Root, "private-extracted");
         ZipFile.ExtractToDirectory(privatePackage, extracted, overwriteFiles: true);
@@ -122,6 +190,16 @@ public sealed class PackageTests : IClassFixture<PackageFixture>
             using var reader = new StreamReader(jsonEntry.Open());
             Assert.DoesNotContain(disposableKey, reader.ReadToEnd(), StringComparison.Ordinal);
         }
+    }
+
+    private sealed class TestAdminKeySource : IAdminKeySource
+    {
+        private readonly string _key;
+
+        public TestAdminKeySource(string key) => _key = key;
+
+        public string? GetKey(string providerId) =>
+            string.Equals(providerId, "openai", StringComparison.OrdinalIgnoreCase) ? _key : null;
     }
 
     private static async Task<string> RunProcessAsync(string executable, IReadOnlyList<string> arguments, string localAppData)
@@ -199,6 +277,18 @@ public sealed class PackageFixture : IAsyncLifetime
         _privatePackage ??= BuildPrivatePackageAsync(key);
 
     public async Task<string> RunPowerShellAsync(string script, params string[] arguments)
+        => await RunPowerShellAsync(script, localAppDataOverride: null, arguments);
+
+    public async Task<string> RunPowerShellWithLocalAppDataAsync(
+        string script,
+        string localAppDataOverride,
+        params string[] arguments)
+        => await RunPowerShellAsync(script, localAppDataOverride, arguments);
+
+    private async Task<string> RunPowerShellAsync(
+        string script,
+        string? localAppDataOverride,
+        IReadOnlyList<string> arguments)
     {
         var shell = FindPowerShell();
         var startInfo = new ProcessStartInfo(shell)
@@ -208,6 +298,10 @@ public sealed class PackageFixture : IAsyncLifetime
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+        if (!string.IsNullOrWhiteSpace(localAppDataOverride))
+        {
+            startInfo.Environment["LOCALAPPDATA"] = localAppDataOverride;
+        }
         startInfo.ArgumentList.Add("-NoProfile");
         startInfo.ArgumentList.Add("-ExecutionPolicy");
         startInfo.ArgumentList.Add("Bypass");

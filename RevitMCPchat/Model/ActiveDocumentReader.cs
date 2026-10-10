@@ -18,8 +18,11 @@ public sealed class ActiveDocumentReader
         }
 
         var document = application.ActiveUIDocument?.Document;
-        return document is null ? NoDocument() : Read(document);
+        return ReadActiveDocument(document);
     }
+
+    public ActiveModelInfo ReadActiveDocument(Document? document) =>
+        document is null ? NoDocument() : Read(document);
 
     public ActiveModelInfo Read(Document document)
     {

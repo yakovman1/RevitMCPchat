@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Events;
 using Autodesk.Revit.UI;
 using Autodesk.Revit.UI.Events;
@@ -18,6 +19,7 @@ public sealed class DocumentEventBridge : IDisposable
     private readonly AgentPipeClient _pipeClient;
     private readonly ActiveDocumentReadHandler _readHandler;
     private readonly ExternalEvent _readActiveDocumentEvent;
+    private readonly ActiveDocumentEventState _activeDocumentState = new();
     private readonly object _stateLock = new();
     private ActiveModelInfo _currentModel = new();
     private bool _disposed;
@@ -36,6 +38,8 @@ public sealed class DocumentEventBridge : IDisposable
         _application.ViewActivated += OnViewActivated;
         _application.ControlledApplication.DocumentSaved += OnDocumentSaved;
         _application.ControlledApplication.DocumentSavedAs += OnDocumentSavedAs;
+        _application.ControlledApplication.DocumentClosing += OnDocumentClosing;
+        _application.ControlledApplication.DocumentClosed += OnDocumentClosed;
     }
 
     public event EventHandler<ActiveModelInfo>? ActiveModelChanged;
@@ -64,10 +68,11 @@ public sealed class DocumentEventBridge : IDisposable
             throw new ObjectDisposedException(nameof(DocumentEventBridge));
         }
 
-        var model = await _readHandler.ReadAsync(_readActiveDocumentEvent, cancellationToken);
-        SetCurrentModel(model, notifyAgent: false);
-        await NotifyActiveModelAsync(model);
-        return model;
+        var activeDocument = await _readHandler.ReadAsync(_readActiveDocumentEvent, cancellationToken);
+        _activeDocumentState.Activate(activeDocument.Document);
+        SetCurrentModel(activeDocument.Model, notifyAgent: false);
+        await NotifyActiveModelAsync(activeDocument.Model);
+        return activeDocument.Model;
     }
 
     public void Dispose()
@@ -81,21 +86,21 @@ public sealed class DocumentEventBridge : IDisposable
         _application.ViewActivated -= OnViewActivated;
         _application.ControlledApplication.DocumentSaved -= OnDocumentSaved;
         _application.ControlledApplication.DocumentSavedAs -= OnDocumentSavedAs;
+        _application.ControlledApplication.DocumentClosing -= OnDocumentClosing;
+        _application.ControlledApplication.DocumentClosed -= OnDocumentClosed;
         _readHandler.Dispose();
         _readActiveDocumentEvent.Dispose();
     }
 
     private void OnViewActivated(object? sender, ViewActivatedEventArgs args)
     {
-        if (args.Document is not null)
-        {
-            SetCurrentModel(_reader.Read(args.Document));
-        }
+        _activeDocumentState.Activate(args.Document);
+        SetCurrentModel(_reader.ReadActiveDocument(args.Document));
     }
 
     private void OnDocumentSaved(object? sender, DocumentSavedEventArgs args)
     {
-        if (args.Document is not null)
+        if (_activeDocumentState.IsActive(args.Document))
         {
             SetCurrentModel(_reader.Read(args.Document));
         }
@@ -103,7 +108,7 @@ public sealed class DocumentEventBridge : IDisposable
 
     private void OnDocumentSavedAs(object? sender, DocumentSavedAsEventArgs args)
     {
-        if (args.Document is null)
+        if (args.Document is null || !_activeDocumentState.IsActive(args.Document))
         {
             return;
         }
@@ -118,6 +123,19 @@ public sealed class DocumentEventBridge : IDisposable
         if (transition?.ShouldBindExistingChats == true)
         {
             _ = NotifyModelSavedAsync(transition);
+        }
+    }
+
+    private void OnDocumentClosing(object? sender, DocumentClosingEventArgs args) =>
+        _activeDocumentState.BeginClose(args.DocumentId, args.Document);
+
+    private void OnDocumentClosed(object? sender, DocumentClosedEventArgs args)
+    {
+        if (_activeDocumentState.CompleteClose(
+            args.DocumentId,
+            succeeded: args.Status == RevitAPIEventStatus.Succeeded))
+        {
+            SetCurrentModel(_reader.ReadActiveDocument(null));
         }
     }
 
@@ -179,21 +197,21 @@ public sealed class DocumentEventBridge : IDisposable
     private sealed class ActiveDocumentReadHandler : IExternalEventHandler, IDisposable
     {
         private readonly ActiveDocumentReader _reader;
-        private readonly ConcurrentQueue<TaskCompletionSource<ActiveModelInfo>> _pending = new();
+        private readonly ConcurrentQueue<TaskCompletionSource<ActiveDocumentSnapshot>> _pending = new();
         private bool _disposed;
 
         public ActiveDocumentReadHandler(ActiveDocumentReader reader) => _reader = reader;
 
         public string GetName() => "Revit MCP Chat active model reader";
 
-        public Task<ActiveModelInfo> ReadAsync(ExternalEvent externalEvent, CancellationToken cancellationToken)
+        public Task<ActiveDocumentSnapshot> ReadAsync(ExternalEvent externalEvent, CancellationToken cancellationToken)
         {
             if (_disposed)
             {
                 throw new ObjectDisposedException(nameof(ActiveDocumentReadHandler));
             }
 
-            var completion = new TaskCompletionSource<ActiveModelInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var completion = new TaskCompletionSource<ActiveDocumentSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
             _pending.Enqueue(completion);
             var request = externalEvent.Raise();
             if (request == ExternalEventRequest.Denied)
@@ -206,10 +224,13 @@ public sealed class DocumentEventBridge : IDisposable
 
         public void Execute(UIApplication application)
         {
-            ActiveModelInfo model;
+            ActiveDocumentSnapshot activeDocument;
             try
             {
-                model = _reader.Read(application);
+                var document = application.ActiveUIDocument?.Document;
+                activeDocument = new ActiveDocumentSnapshot(
+                    _reader.ReadActiveDocument(document),
+                    document);
             }
             catch (Exception exception)
             {
@@ -223,7 +244,7 @@ public sealed class DocumentEventBridge : IDisposable
 
             while (_pending.TryDequeue(out var completion))
             {
-                completion.TrySetResult(model);
+                completion.TrySetResult(activeDocument);
             }
         }
 
@@ -236,8 +257,8 @@ public sealed class DocumentEventBridge : IDisposable
             }
         }
 
-        private static async Task<ActiveModelInfo> AwaitWithCancellationAsync(
-            Task<ActiveModelInfo> task,
+        private static async Task<ActiveDocumentSnapshot> AwaitWithCancellationAsync(
+            Task<ActiveDocumentSnapshot> task,
             CancellationToken cancellationToken)
         {
             if (!cancellationToken.CanBeCanceled)
@@ -255,6 +276,18 @@ public sealed class DocumentEventBridge : IDisposable
             }
 
             return await task.ConfigureAwait(false);
+        }
+
+        public sealed class ActiveDocumentSnapshot
+        {
+            public ActiveDocumentSnapshot(ActiveModelInfo model, Document? document)
+            {
+                Model = model;
+                Document = document;
+            }
+
+            public ActiveModelInfo Model { get; }
+            public Document? Document { get; }
         }
     }
 }

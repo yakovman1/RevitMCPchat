@@ -18,6 +18,7 @@
     <Compile Include="..\..\RevitMCPchat\Agent\IAgentCommandClient.cs" Link="IAgentCommandClient.cs" />
     <Compile Include="..\..\RevitMCPchat\Agent\AgentPipeClient.cs" Link="AgentPipeClient.cs" />
     <Compile Include="..\..\RevitMCPchat\Agent\AgentProcessHost.cs" Link="AgentProcessHost.cs" />
+    <Compile Include="..\..\RevitMCPchat\Model\ActiveDocumentEventState.cs" Link="ActiveDocumentEventState.cs" />
     <Compile Include="..\..\RevitMCPchat\ViewModels\ObservableViewModel.cs" Link="ObservableViewModel.cs" />
     <Compile Include="..\..\RevitMCPchat\ViewModels\ChatViewModel.cs" Link="ChatViewModel.cs" />
     <Compile Include="..\..\RevitMCPchat\ViewModels\HistoryViewModel.cs" Link="HistoryViewModel.cs" />

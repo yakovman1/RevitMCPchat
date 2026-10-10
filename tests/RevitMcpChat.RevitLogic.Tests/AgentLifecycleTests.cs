@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using RevitMCPchat.Agent;
@@ -49,6 +50,67 @@ public sealed class AgentLifecycleTests
         await second.StopAsync(CancellationToken.None);
     }
 
+    [Fact]
+    public async Task EnsureRunningRestartsExitedAgentForSameRevitProcess()
+    {
+        var factory = new FakeProcessFactory();
+        var pipe = AgentPipeNames.ForRevitPid(4224);
+        var host = new AgentProcessHost(
+            "RevitMcpChat.Agent.exe",
+            factory,
+            (pipeName, _) =>
+            {
+                factory.FindLast(pipeName).Exit();
+                return Task.CompletedTask;
+            });
+
+        await host.StartAsync(4224, pipe, CancellationToken.None);
+        factory.Children[0].Exit();
+
+        await host.EnsureRunningAsync(4224, pipe, CancellationToken.None);
+
+        Assert.Equal(2, factory.Children.Count);
+        Assert.Contains("--revit-pid 4224", factory.Children[1].StartInfo.Arguments);
+        Assert.Contains(pipe, factory.Children[1].StartInfo.Arguments);
+        Assert.True(host.IsRunning);
+        await host.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task EnsureRunningDoesNotStartDuplicateAgent()
+    {
+        var factory = new FakeProcessFactory();
+        var pipe = AgentPipeNames.ForRevitPid(5335);
+        var host = new AgentProcessHost("RevitMcpChat.Agent.exe", factory);
+
+        await host.StartAsync(5335, pipe, CancellationToken.None);
+        await host.EnsureRunningAsync(5335, pipe, CancellationToken.None);
+
+        Assert.Single(factory.Children);
+    }
+
+    [Fact]
+    public void InstalledAgentPathResolvesRelativeToAddinInCustomInstallRoot()
+    {
+        var installRoot = Path.Combine(Path.GetTempPath(), "RevitMcpChat-AgentPath-" + System.Guid.NewGuid().ToString("N"));
+        var addinDirectory = Path.Combine(installRoot, "addin", "2024");
+        var addinPath = Path.Combine(addinDirectory, "RevitMCPchat.dll");
+        var agentPath = Path.Combine(installRoot, "agent", "RevitMcpChat.Agent.exe");
+        Directory.CreateDirectory(addinDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(agentPath)!);
+        File.WriteAllText(addinPath, "test assembly placeholder");
+        File.WriteAllText(agentPath, "test agent placeholder");
+
+        try
+        {
+            Assert.Equal(agentPath, AgentProcessHost.FindInstalledAgentPath(addinPath));
+        }
+        finally
+        {
+            Directory.Delete(installRoot, recursive: true);
+        }
+    }
+
     private sealed class FakeProcessFactory : IAgentChildProcessFactory
     {
         public List<FakeChildProcess> Children { get; } = new();
@@ -61,6 +123,7 @@ public sealed class AgentLifecycleTests
         }
 
         public FakeChildProcess Find(string pipeName) => Children.Find(child => child.StartInfo.Arguments.Contains(pipeName))!;
+        public FakeChildProcess FindLast(string pipeName) => Children.FindLast(child => child.StartInfo.Arguments.Contains(pipeName))!;
     }
 
     private sealed class FakeChildProcess : IAgentChildProcess

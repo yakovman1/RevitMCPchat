@@ -47,8 +47,29 @@ public sealed class AgentProcessHost : IDisposable
     public string? PipeName { get; private set; }
     public bool IsRunning => _process is not null && !_process.HasExited;
 
-    public static string FindInstalledAgentPath()
+    public static string FindInstalledAgentPath(string? addinAssemblyPath = null)
     {
+        var addinPath = string.IsNullOrWhiteSpace(addinAssemblyPath)
+            ? typeof(AgentProcessHost).Assembly.Location
+            : addinAssemblyPath;
+        if (!string.IsNullOrWhiteSpace(addinPath))
+        {
+            var addinDirectory = Path.GetDirectoryName(Path.GetFullPath(addinPath));
+            if (!string.IsNullOrWhiteSpace(addinDirectory))
+            {
+                var relativeAgentPath = Path.GetFullPath(Path.Combine(
+                    addinDirectory,
+                    "..",
+                    "..",
+                    "agent",
+                    "RevitMcpChat.Agent.exe"));
+                if (File.Exists(relativeAgentPath))
+                {
+                    return relativeAgentPath;
+                }
+            }
+        }
+
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         if (string.IsNullOrWhiteSpace(localAppData))
         {
@@ -57,6 +78,9 @@ public sealed class AgentProcessHost : IDisposable
 
         return Path.Combine(localAppData, "RevitMcpChat", "agent", "RevitMcpChat.Agent.exe");
     }
+
+    public Task EnsureRunningAsync(int revitPid, string pipeName, CancellationToken cancellationToken) =>
+        IsRunning ? Task.CompletedTask : StartAsync(revitPid, pipeName, cancellationToken);
 
     public Task StartAsync(int revitPid, string pipeName, CancellationToken cancellationToken)
     {

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Threading;
+using System.Threading.Tasks;
 using Autodesk.Revit.UI;
 using RevitMCPchat.Agent;
 using RevitMCPchat.Model;
@@ -19,17 +20,22 @@ public sealed class RevitApp : IExternalApplication
     public static string? AgentStartupMessage { get; private set; }
 
     private ChatPaneProvider? _paneProvider;
-    private AgentProcessHost? _agentHost;
+    private static readonly SemaphoreSlim AgentRecoveryLock = new(1, 1);
+    private static AgentProcessHost? _agentHost;
+    private static int _revitPid;
+    private static string? _pipeName;
+    private static bool _shuttingDown;
 
     public Result OnStartup(UIControlledApplication application)
     {
-        var revitPid = Process.GetCurrentProcess().Id;
-        var pipeName = AgentPipeNames.ForRevitPid(revitPid);
-        PipeClient = new AgentPipeClient(pipeName);
+        _shuttingDown = false;
+        _revitPid = Process.GetCurrentProcess().Id;
+        _pipeName = AgentPipeNames.ForRevitPid(_revitPid);
+        PipeClient = new AgentPipeClient(_pipeName);
         try
         {
-            _agentHost = new AgentProcessHost(AgentProcessHost.FindInstalledAgentPath());
-            _agentHost.StartAsync(revitPid, pipeName, CancellationToken.None).GetAwaiter().GetResult();
+            _agentHost = new AgentProcessHost(AgentProcessHost.FindInstalledAgentPath(Assembly.GetExecutingAssembly().Location));
+            _agentHost.EnsureRunningAsync(_revitPid, _pipeName, CancellationToken.None).GetAwaiter().GetResult();
             AgentStartupMessage = "Connected to local agent.";
         }
         catch (FileNotFoundException exception)
@@ -59,14 +65,55 @@ public sealed class RevitApp : IExternalApplication
 
     public Result OnShutdown(UIControlledApplication application)
     {
+        _shuttingDown = true;
         DocumentBridge?.Dispose();
         DocumentBridge = null;
         PipeClient = null;
-        _agentHost?.StopAsync(CancellationToken.None).GetAwaiter().GetResult();
-        _agentHost?.Dispose();
-        _agentHost = null;
+        AgentRecoveryLock.Wait();
+        try
+        {
+            _agentHost?.StopAsync(CancellationToken.None).GetAwaiter().GetResult();
+            _agentHost?.Dispose();
+            _agentHost = null;
+        }
+        finally
+        {
+            AgentRecoveryLock.Release();
+        }
+
         _paneProvider?.Dispose();
         _paneProvider = null;
         return Result.Succeeded;
+    }
+
+    public static async Task EnsureAgentRunningAsync(CancellationToken cancellationToken)
+    {
+        await AgentRecoveryLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_shuttingDown)
+            {
+                throw new InvalidOperationException("Revit is shutting down; the local agent cannot restart.");
+            }
+
+            if (_revitPid <= 0)
+            {
+                throw new InvalidOperationException("The Revit agent session has not been initialized.");
+            }
+            var pipeName = _pipeName ?? throw new InvalidOperationException(
+                "The Revit agent session has not been initialized.");
+
+            if (_agentHost is null)
+            {
+                _agentHost = new AgentProcessHost(AgentProcessHost.FindInstalledAgentPath(Assembly.GetExecutingAssembly().Location));
+            }
+
+            await _agentHost.EnsureRunningAsync(_revitPid, pipeName, cancellationToken);
+            AgentStartupMessage = "Connected to local agent.";
+        }
+        finally
+        {
+            AgentRecoveryLock.Release();
+        }
     }
 }

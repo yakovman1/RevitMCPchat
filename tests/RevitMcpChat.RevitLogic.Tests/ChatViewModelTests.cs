@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using RevitMCPchat.ViewModels;
@@ -70,6 +71,37 @@ public sealed class ChatViewModelTests
 
         Assert.Contains("rvt-mcp", viewModel.McpGuidance, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("установите", viewModel.McpGuidance, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ReconnectRestartsAgentAndRefreshesModelBeforeMcpReconnect()
+    {
+        var client = new ViewModelTestClient();
+        var sequence = new List<string>();
+        client.ReplyFactory = command =>
+        {
+            sequence.Add(command.Kind);
+            return new AgentReply
+            {
+                RequestId = command.RequestId,
+                Kind = AgentReplyKinds.Response,
+                PayloadJson = "{}"
+            };
+        };
+        var viewModel = new ChatViewModel(client, _ =>
+        {
+            sequence.Add("ensure-agent");
+            return Task.CompletedTask;
+        });
+        viewModel.SetActiveModel(new ActiveModelInfo
+        {
+            Identity = ModelIdentity.ForSaved(@"C:\Projects\Current.rvt"),
+            IsOpen = true
+        });
+
+        await viewModel.ReconnectAsync();
+
+        Assert.Equal(new[] { "ensure-agent", AgentCommandKinds.ModelActive, AgentCommandKinds.Reconnect }, sequence);
     }
 
     [Fact]

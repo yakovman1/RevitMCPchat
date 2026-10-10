@@ -9,6 +9,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $installPath = [IO.Path]::GetFullPath($InstallRoot)
 $addinsPath = [IO.Path]::GetFullPath($AddinsRoot)
+$localAppDataPath = [IO.Path]::GetFullPath($env:LOCALAPPDATA)
 foreach ($year in $RevitYears) {
     if ($year -notin @(2022, 2023, 2024)) {
         throw "Revit $year is not supported by this uninstaller."
@@ -30,9 +31,26 @@ if (Test-Path -LiteralPath $agentDirectory -PathType Container) {
     Remove-Item -LiteralPath $agentDirectory -Recurse -Force
 }
 
-if ($Purge -and (Test-Path -LiteralPath $installPath -PathType Container)) {
-    Remove-Item -LiteralPath $installPath -Recurse -Force
-    Write-Host 'Revit MCP Chat program files and user data were removed.'
+if ($Purge) {
+    $userDataPath = Join-Path $localAppDataPath 'RevitMcpChat'
+    foreach ($fileName in @('settings.json', 'history.sqlite3', 'history.sqlite3-shm', 'history.sqlite3-wal')) {
+        $dataFile = Join-Path $userDataPath $fileName
+        if (Test-Path -LiteralPath $dataFile -PathType Leaf) {
+            Remove-Item -LiteralPath $dataFile -Force
+        }
+    }
+
+    $secretsDirectory = Join-Path $userDataPath 'secrets'
+    if (Test-Path -LiteralPath $secretsDirectory -PathType Container) {
+        Remove-Item -LiteralPath $secretsDirectory -Recurse -Force
+    }
+
+    if ((Test-Path -LiteralPath $userDataPath -PathType Container) -and
+        -not (Get-ChildItem -LiteralPath $userDataPath -Force | Select-Object -First 1)) {
+        Remove-Item -LiteralPath $userDataPath -Force
+    }
+
+    Write-Host 'Revit MCP Chat files and known user settings, history and keys were removed.'
 }
 else {
     Write-Host 'Revit MCP Chat add-in and agent were removed. User history, settings and DPAPI keys were preserved.'

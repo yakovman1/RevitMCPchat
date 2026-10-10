@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
 using RevitMCPchat.Agent;
@@ -10,13 +11,15 @@ public sealed class ChatPaneViewModel : ObservableViewModel
 {
     private int _selectedTabIndex;
 
-    public ChatPaneViewModel(IAgentCommandClient client)
+    public ChatPaneViewModel(
+        IAgentCommandClient client,
+        Func<CancellationToken, Task>? ensureAgentRunning = null)
     {
         if (client is null)
         {
             throw new ArgumentNullException(nameof(client));
         }
-        Chat = new ChatViewModel(client);
+        Chat = new ChatViewModel(client, ensureAgentRunning);
         History = new HistoryViewModel(client);
         Settings = new SettingsViewModel(client);
         NewChatCommand = new AsyncRelayCommand(CreateNewChatAsync, () => Chat.ActiveModel.IsOpen && !Chat.IsSending);
