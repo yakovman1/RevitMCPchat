@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.Data.Sqlite;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using RevitMcpChat.Agent.Chat;
 using RevitMcpChat.Agent.Mcp;
+using RevitMcpChat.Agent.History;
 using RevitMcpChat.Contracts;
 using Xunit;
 
@@ -13,6 +16,43 @@ namespace RevitMcpChat.Agent.Tests;
 
 public sealed class ChatEngineTests
 {
+    [Fact]
+    public async Task WrongModelChatCannotIssueToolCall()
+    {
+        var temp = Path.Combine(Path.GetTempPath(), "RevitMcpChatModelGuard-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        var history = new SqliteChatHistory(temp);
+        try
+        {
+            var conversationId = await history.CreateAsync(
+                ModelIdentity.ForSaved(@"C:\Project\A.rvt"), "openai", "test-model", CancellationToken.None);
+            var tool = Tool("revit_create_wall", readOnly: false);
+            var gateway = new FakeGateway(tool);
+            var provider = new ScriptedProvider(
+                new ProviderEvent[] { new ProviderToolCallEvent("call-guard", tool.Name, "{}") });
+            var sink = new FakeSink(approve: true);
+            var request = Turn("Create a wall.");
+            request.ConversationId = conversationId;
+            request.ModelIdentity = ModelIdentity.ForSaved(@"C:\Project\B.rvt");
+
+            await new ChatEngine(provider, gateway, history: history)
+                .RunAsync(request, sink, CancellationToken.None);
+
+            Assert.Equal(0, gateway.CallCount);
+            Assert.Empty(provider.Requests);
+            Assert.Contains(sink.Events, item => item.Kind == "chat_model_mismatch");
+        }
+        finally
+        {
+            await history.DisposeAsync();
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(temp))
+            {
+                Directory.Delete(temp, recursive: true);
+            }
+        }
+    }
+
     [Fact]
     public async Task ReadOnlyToolRunsWithoutApproval()
     {

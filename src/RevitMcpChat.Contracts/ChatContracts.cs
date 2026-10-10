@@ -28,6 +28,7 @@ namespace RevitMcpChat.Contracts
         public string Kind { get; set; } = string.Empty;
         public string Text { get; set; } = string.Empty;
         public string CallId { get; set; } = string.Empty;
+        public string ToolName { get; set; } = string.Empty;
     }
 
     public interface IChatEventSink

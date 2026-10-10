@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using RevitMcpChat.Agent.History;
 using RevitMcpChat.Agent.Mcp;
 using RevitMcpChat.Contracts;
 
@@ -19,12 +20,14 @@ public sealed class ChatEngine
     private readonly IChatProvider _provider;
     private readonly IMcpGateway _mcp;
     private readonly ToolPolicy _toolPolicy;
+    private readonly IChatHistory? _history;
 
-    public ChatEngine(IChatProvider provider, IMcpGateway mcp, ToolPolicy? toolPolicy = null)
+    public ChatEngine(IChatProvider provider, IMcpGateway mcp, ToolPolicy? toolPolicy = null, IChatHistory? history = null)
     {
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
         _mcp = mcp ?? throw new ArgumentNullException(nameof(mcp));
         _toolPolicy = toolPolicy ?? new ToolPolicy();
+        _history = history;
     }
 
     public async Task RunAsync(
@@ -47,6 +50,20 @@ public sealed class ChatEngine
             throw new ArgumentException("A user message is required.", nameof(request));
         }
 
+        if (_history is not null)
+        {
+            var transcript = await _history.LoadAsync(request.ConversationId, cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(transcript.ModelIdentity, request.ModelIdentity, StringComparison.Ordinal))
+            {
+                await PublishAsync(
+                    eventSink,
+                    request.ConversationId,
+                    "chat_model_mismatch",
+                    "This chat belongs to a different Revit model and cannot run tools for the active model.",
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+        }
         var advertisedTools = await _mcp.ListToolsAsync(cancellationToken).ConfigureAwait(false);
         var selectedTools = ToolCatalogSelector.Select(request.UserText, advertisedTools);
         var selectedByName = selectedTools.ToDictionary(tool => tool.Name, StringComparer.Ordinal);
