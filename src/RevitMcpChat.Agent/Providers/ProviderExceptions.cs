@@ -11,3 +11,8 @@ public sealed class ProviderRequestException : Exception
 {
     public ProviderRequestException(string message) : base(message) { }
 }
+
+public sealed class ProviderCapabilityException : Exception
+{
+    public ProviderCapabilityException(string message) : base(message) { }
+}

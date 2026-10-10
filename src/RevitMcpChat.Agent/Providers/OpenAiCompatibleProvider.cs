@@ -18,8 +18,15 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
     private readonly HttpClient _httpClient;
     private readonly Uri _completionUri;
     private readonly string _apiKey;
+    private readonly string _authorizationScheme;
+    private readonly string _authorizationHeaderName;
 
-    public OpenAiCompatibleProvider(HttpClient httpClient, Uri baseUri, string apiKey)
+    public OpenAiCompatibleProvider(
+        HttpClient httpClient,
+        Uri baseUri,
+        string apiKey,
+        string authorizationScheme = "Bearer",
+        string authorizationHeaderName = "Authorization")
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         if (baseUri is null || !baseUri.IsAbsoluteUri ||
@@ -39,7 +46,14 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
             : normalizedBase + "/chat/completions";
 
         _completionUri = new Uri(endpoint, UriKind.Absolute);
+        if (string.IsNullOrWhiteSpace(authorizationHeaderName))
+        {
+            throw new ArgumentException("An authorization header name is required.", nameof(authorizationHeaderName));
+        }
+
         _apiKey = apiKey;
+        _authorizationScheme = authorizationScheme ?? string.Empty;
+        _authorizationHeaderName = authorizationHeaderName;
     }
 
     public async IAsyncEnumerable<ProviderEvent> StreamAsync(
@@ -47,7 +61,21 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         using var message = new HttpRequestMessage(HttpMethod.Post, _completionUri);
-        message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        if (string.Equals(_authorizationHeaderName, "Authorization", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(_authorizationScheme))
+            {
+                message.Headers.TryAddWithoutValidation("Authorization", _apiKey);
+            }
+            else
+            {
+                message.Headers.Authorization = new AuthenticationHeaderValue(_authorizationScheme, _apiKey);
+            }
+        }
+        else if (!message.Headers.TryAddWithoutValidation(_authorizationHeaderName, _apiKey))
+        {
+            throw new ProviderRequestException("The configured provider authentication header is invalid.");
+        }
         message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
         message.Content = new ByteArrayContent(BuildRequestBody(request));
         message.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
