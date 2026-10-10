@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>Revit MCP Chat</Name>
+    <!-- The installer replaces this token with the absolute add-in directory. -->
+    <Assembly>__ADDIN_DIRECTORY__\RevitMCPchat.dll</Assembly>
+    <AddInId>5c3bd392-7fa5-4976-a889-2fe0cbd531b2</AddInId>
+    <FullClassName>RevitMCPchat.RevitApp</FullClassName>
+    <VendorId>RVTMCP</VendorId>
+    <VendorDescription>Revit MCP Chat</VendorDescription>
+  </AddIn>
+</RevitAddIns>

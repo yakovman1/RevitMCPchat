@@ -3,4 +3,5 @@
   <Project Path="src/RevitMcpChat.Contracts/RevitMcpChat.Contracts.csproj" />
   <Project Path="src/RevitMcpChat.Agent/RevitMcpChat.Agent.csproj" />
   <Project Path="tests/RevitMcpChat.Agent.Tests/RevitMcpChat.Agent.Tests.csproj" />
+  <Project Path="tests/RevitMcpChat.RevitLogic.Tests/RevitMcpChat.RevitLogic.Tests.csproj" />
 </Solution>
