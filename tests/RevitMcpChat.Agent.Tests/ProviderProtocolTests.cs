@@ -35,6 +35,7 @@ public sealed class ProviderProtocolTests
     public async Task DeepSeekUsesConfiguredBaseUrl()
     {
         var handler = new FakeHttpHandler(_ => Sse(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Ready.\"}}]}\n\n" +
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"ds-call\",\"function\":{\"name\":\"revit_get_levels\",\"arguments\":\"{\\\"includeLinked\\\":false}\"}}]}}]}\n\n" +
             "data: [DONE]\n\n"));
         using var client = new HttpClient(handler);
@@ -43,11 +44,15 @@ public sealed class ProviderProtocolTests
             new ResolvedCredential(CredentialSource.User, "deepseek-key"),
             client);
 
-        var events = await CollectAsync(provider, Request());
+        var events = await CollectAsync(provider, new ProviderRequest(
+            "deepseek-flash",
+            new[] { ProviderMessage.User("List levels.") },
+            new[] { Tool("revit_get_levels") }));
 
         Assert.Equal(new Uri("https://api.deepseek.com/chat/completions"), handler.RequestUri);
         Assert.Equal(new AuthenticationHeaderValue("Bearer", "deepseek-key"), handler.Authorization);
-        var call = Assert.IsType<ProviderToolCallEvent>(Assert.Single(events));
+        Assert.Equal("Ready.", Assert.IsType<ProviderTextDeltaEvent>(events[0]).Text);
+        var call = Assert.IsType<ProviderToolCallEvent>(events[1]);
         Assert.Equal("revit_get_levels", call.Name);
         Assert.Equal("{\"includeLinked\":false}", call.ArgumentsJson);
     }
@@ -79,15 +84,49 @@ public sealed class ProviderProtocolTests
     }
 
     [Fact]
+    public async Task YandexStreamsFunctionCall()
+    {
+        var handler = new FakeHttpHandler(_ => Sse(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"yandex-call\",\"type\":\"function\",\"function\":{\"name\":\"revit_get_levels\",\"arguments\":\"{\\\"includeLinked\\\":false}\"}}]}}]}\n\n" +
+            "data: [DONE]\n\n"));
+        using var client = new HttpClient(handler);
+        var profile = Profile("yandex-ai-studio", "https://ai.api.cloud.yandex.net/v1", "yandexgpt");
+        profile.Parameters["folder_id"] = "folder-123";
+        var provider = ProviderFactory.Create(
+            profile,
+            new ResolvedCredential(CredentialSource.User, "yc-secret"),
+            client);
+
+        var events = await CollectAsync(provider, new ProviderRequest(
+            "yandexgpt",
+            new[] { ProviderMessage.User("List levels.") },
+            new[] { Tool("revit_get_levels") }));
+
+        using var body = JsonDocument.Parse(handler.RequestBody);
+        Assert.Equal("revit_get_levels",
+            body.RootElement.GetProperty("tools")[0].GetProperty("function").GetProperty("name").GetString());
+        var call = Assert.IsType<ProviderToolCallEvent>(Assert.Single(events));
+        Assert.Equal("yandex-call", call.CallId);
+        Assert.Equal("revit_get_levels", call.Name);
+        Assert.Equal("{\"includeLinked\":false}", call.ArgumentsJson);
+    }
+
+    [Fact]
     public async Task AnthropicToolUseRoundTrips()
     {
         const string response =
             "event: content_block_start\n" +
-            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"anthropic-call\",\"name\":\"revit_get_levels\",\"input\":{}}}\n\n" +
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"Checking.\"}}\n\n" +
             "event: content_block_delta\n" +
-            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"includeLinked\\\":false}\"}}\n\n" +
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Checking.\"}}\n\n" +
             "event: content_block_stop\n" +
             "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+            "event: content_block_start\n" +
+            "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"anthropic-call\",\"name\":\"revit_get_levels\",\"input\":{}}}\n\n" +
+            "event: content_block_delta\n" +
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"includeLinked\\\":false}\"}}\n\n" +
+            "event: content_block_stop\n" +
+            "data: {\"type\":\"content_block_stop\",\"index\":1}\n\n" +
             "event: message_stop\n" +
             "data: {\"type\":\"message_stop\"}\n\n";
         var handler = new FakeHttpHandler(_ => Sse(response));
@@ -119,7 +158,8 @@ public sealed class ProviderProtocolTests
         Assert.Contains(body.RootElement.GetProperty("messages").EnumerateArray(),
             message => message.GetProperty("role").GetString() == "user"
                 && message.GetProperty("content").ToString().Contains("tool_result", StringComparison.Ordinal));
-        var call = Assert.IsType<ProviderToolCallEvent>(Assert.Single(events));
+        Assert.Equal("Checking.", Assert.IsType<ProviderTextDeltaEvent>(events[0]).Text);
+        var call = Assert.IsType<ProviderToolCallEvent>(events[1]);
         Assert.Equal("anthropic-call", call.CallId);
         Assert.Equal("{\"includeLinked\":false}", call.ArgumentsJson);
     }
@@ -128,7 +168,7 @@ public sealed class ProviderProtocolTests
     public async Task GeminiFunctionCallRoundTrips()
     {
         const string response =
-            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"id\":\"gemini-call\",\"name\":\"revit_get_levels\",\"args\":{\"includeLinked\":false}}}]}}]}\n\n";
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Checking.\"},{\"functionCall\":{\"id\":\"gemini-call\",\"name\":\"revit_get_levels\",\"args\":{\"includeLinked\":false}}}]}}]}\n\n";
         var handler = new FakeHttpHandler(_ => Sse(response));
         using var client = new HttpClient(handler);
         var provider = ProviderFactory.Create(
@@ -160,7 +200,8 @@ public sealed class ProviderProtocolTests
         Assert.Contains(body.RootElement.GetProperty("contents").EnumerateArray(),
             item => item.GetProperty("role").GetString() == "user"
                 && item.ToString().Contains("functionResponse", StringComparison.Ordinal));
-        var call = Assert.IsType<ProviderToolCallEvent>(Assert.Single(events));
+        Assert.Equal("Checking.", Assert.IsType<ProviderTextDeltaEvent>(events[0]).Text);
+        var call = Assert.IsType<ProviderToolCallEvent>(events[1]);
         Assert.Equal("gemini-call", call.CallId);
         Assert.Equal("{\"includeLinked\":false}", call.ArgumentsJson);
     }
@@ -209,6 +250,60 @@ public sealed class ProviderProtocolTests
         Assert.Equal(2, completionRequests);
         Assert.Equal("Bearer giga-access-2", handler.Authorization?.ToString());
         Assert.Equal("ready", Assert.IsType<ProviderTextDeltaEvent>(Assert.Single(events)).Text);
+    }
+
+    [Fact]
+    public async Task GigaChatStreamsFunctionCallAndFormatsToolHistory()
+    {
+        var handler = new FakeHttpHandler(request =>
+        {
+            if (request.RequestUri!.AbsolutePath.EndsWith("/oauth", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        "{\"access_token\":\"giga-access\",\"expires_at\":" +
+                        DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeSeconds() + "}",
+                        Encoding.UTF8,
+                        "application/json")
+                };
+            }
+
+            return Sse(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Ready.\",\"function_call\":{\"name\":\"revit_get_levels\",\"arguments\":{\"includeLinked\":false}},\"functions_state_id\":\"giga-call\"}}]}\n\n" +
+                "data: [DONE]\n\n");
+        });
+        using var client = new HttpClient(handler);
+        var provider = ProviderFactory.Create(
+            Profile("sbergigachat", "https://api.giga.chat", "GigaChat"),
+            new ResolvedCredential(CredentialSource.User, "giga-authorization-key"),
+            client);
+        var request = new ProviderRequest(
+            "GigaChat",
+            new ProviderMessage[]
+            {
+                ProviderMessage.User("List levels."),
+                ProviderMessage.Assistant("", new[]
+                {
+                    new ProviderToolCall("previous-call", "revit_get_levels", "{\"includeLinked\":false}")
+                }),
+                ProviderMessage.ToolResult("previous-call", "revit_get_levels", "{\"levels\":[]}"),
+            },
+            new[] { Tool("revit_get_levels") });
+
+        var events = await CollectAsync(provider, request);
+
+        Assert.Equal("Ready.", Assert.IsType<ProviderTextDeltaEvent>(events[0]).Text);
+        Assert.Equal("revit_get_levels", Assert.IsType<ProviderToolCallEvent>(events[1]).Name);
+        using var body = JsonDocument.Parse(handler.RequestBody);
+        Assert.Equal("auto", body.RootElement.GetProperty("function_call").GetString());
+        Assert.Equal("revit_get_levels", body.RootElement.GetProperty("functions")[0].GetProperty("name").GetString());
+        Assert.Contains(body.RootElement.GetProperty("messages").EnumerateArray(),
+            message => message.GetProperty("role").GetString() == "assistant"
+                && message.TryGetProperty("function_call", out _));
+        Assert.Contains(body.RootElement.GetProperty("messages").EnumerateArray(),
+            message => message.GetProperty("role").GetString() == "function"
+                && message.GetProperty("name").GetString() == "revit_get_levels");
     }
 
     [Fact]

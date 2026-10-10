@@ -160,6 +160,7 @@ $($entries -join ",`r`n")
     $docsDirectory = Join-Path $stagePath 'docs'
     New-Item -ItemType Directory -Path $docsDirectory -Force | Out-Null
     Copy-Item (Join-Path $repoRoot 'docs\install.md') (Join-Path $docsDirectory 'install.md')
+    Copy-Item (Join-Path $repoRoot 'docs\test-matrix.md') (Join-Path $docsDirectory 'test-matrix.md')
 
     $verifyScript = Join-Path $stagePath 'verify-package.ps1'
     & $verifyScript -PackageRoot $stagePath

@@ -1,6 +1,6 @@
 # Revit MCP Chat
 
-Revit MCP Chat is a separate, dockable Revit add-in for Revit 2022, 2023 and 2024. It provides an AI chat, model-scoped chat history, provider settings and confirmation prompts for model-changing MCP tools.
+Revit MCP Chat is a separate, dockable Revit add-in for Revit 2022, 2023 and 2024. This release does not support Revit 2025 or newer. It provides an AI chat, model-scoped chat history, provider settings and confirmation prompts for model-changing MCP tools.
 
 The add-in targets .NET Framework 4.8. Its local .NET 8 agent starts the separately installed [`rvt-mcp`](https://github.com/yakovman1/rvt-mcp) server and talks to it over MCP stdio. Revit MCP Chat does not install or modify `rvt-mcp`.
 
@@ -32,6 +32,10 @@ Administrators can build a private package with a local JSON file that maps prov
 Run `packaging/build-release.ps1 -Configuration Release -AdminKeysFile <local-json-path>`. The build generates a temporary C# key source, compiles it into the private agent, and removes the temporary source after the build. The key is not placed in the UI or settings configuration. A key compiled into a client binary can still be extracted by someone who can inspect that binary or its process memory; use a server-side proxy if the key must remain secret from users.
 
 The public build omits the generated key source. Do not commit the key file or distribute a private package beyond its intended audience.
+
+## Release validation
+
+See [docs/test-matrix.md](docs/test-matrix.md) for automated results, live-host checks and known validation limits. Live Revit tests are reported separately from tests that use simulated MCP servers.
 
 ## Build and verify
 

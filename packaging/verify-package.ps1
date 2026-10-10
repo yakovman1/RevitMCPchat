@@ -13,7 +13,8 @@ $requiredPaths = @(
     'uninstall.ps1',
     'verify-package.ps1',
     'README.md',
-    'docs\install.md'
+    'docs\install.md',
+    'docs\test-matrix.md'
 )
 foreach ($year in @(2022, 2023, 2024)) {
     $requiredPaths += "addins\$year\RevitMCPchat.dll"
