@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.IO;
@@ -353,11 +354,20 @@ public sealed class PackageFixture : IAsyncLifetime
     {
         foreach (var executable in new[] { "pwsh.exe", "powershell.exe" })
         {
-            var process = Process.Start(new ProcessStartInfo(executable, "-NoProfile -Command exit")
+            Process? process;
+            try
             {
-                UseShellExecute = false,
-                CreateNoWindow = true
-            });
+                process = Process.Start(new ProcessStartInfo(executable, "-NoProfile -Command exit")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                });
+            }
+            catch (Win32Exception)
+            {
+                continue;
+            }
+
             if (process is not null)
             {
                 process.WaitForExit();
