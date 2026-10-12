@@ -58,6 +58,8 @@ function Invoke-DotNet([string[]]$Arguments, [bool]$Quiet) {
     }
 }
 
+. (Join-Path $PSScriptRoot 'CompressArchiveWithRetry.ps1')
+
 function Read-AdminKeys([string]$Path) {
     try {
         $json = [IO.File]::ReadAllText([IO.Path]::GetFullPath($Path))
@@ -170,7 +172,7 @@ $($entries -join ",`r`n")
     if (Test-Path -LiteralPath $packagePath) {
         Remove-Item -LiteralPath $packagePath -Force
     }
-    Compress-Archive -Path (Join-Path $stagePath '*') -DestinationPath $packagePath -CompressionLevel Optimal
+    Compress-ArchiveWithRetry -Path (Join-Path $stagePath '*') -DestinationPath $packagePath -CompressionLevel Optimal
     Write-Host "Package created: $packagePath"
 }
 catch {

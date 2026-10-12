@@ -193,6 +193,46 @@ public sealed class PackageTests : IClassFixture<PackageFixture>
         }
     }
 
+    [Fact]
+    public async Task PackageArchiveRetriesTransientFileLocks()
+    {
+        var sourceDirectory = Path.Combine(_fixture.Root, "archive-source");
+        Directory.CreateDirectory(sourceDirectory);
+        var sourceFile = Path.Combine(sourceDirectory, "locked.dll");
+        await File.WriteAllTextAsync(sourceFile, "archive after lock release");
+
+        var archivePath = Path.Combine(_fixture.Root, "lock-retry.zip");
+        var helperPath = Path.Combine(_fixture.SourceRoot, "packaging", "CompressArchiveWithRetry.ps1");
+        var scriptPath = Path.Combine(_fixture.Root, "compress-with-retry.ps1");
+        await File.WriteAllTextAsync(scriptPath,
+            "$ErrorActionPreference = 'Stop'" + Environment.NewLine +
+            $". '{QuotePowerShellLiteral(helperPath)}'{Environment.NewLine}" +
+            $"Compress-ArchiveWithRetry -Path '{QuotePowerShellLiteral(Path.Combine(sourceDirectory, "*"))}' " +
+            $"-DestinationPath '{QuotePowerShellLiteral(archivePath)}' -CompressionLevel Optimal{Environment.NewLine}");
+
+        using var fileLock = new FileStream(sourceFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var releaseLock = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(600));
+            fileLock.Dispose();
+        });
+
+        try
+        {
+            await _fixture.RunPowerShellAsync(scriptPath);
+        }
+        finally
+        {
+            await releaseLock;
+        }
+
+        Assert.True(File.Exists(archivePath));
+        using var archive = ZipFile.OpenRead(archivePath);
+        Assert.Contains(archive.Entries, entry => entry.FullName.Equals("locked.dll", StringComparison.Ordinal));
+    }
+
+    private static string QuotePowerShellLiteral(string value) => value.Replace("'", "''", StringComparison.Ordinal);
+
     private sealed class TestAdminKeySource : IAdminKeySource
     {
         private readonly string _key;
@@ -243,6 +283,7 @@ public sealed class PackageFixture : IAsyncLifetime
     }
 
     public string Root { get; }
+    public string SourceRoot => _sourceRoot;
     public string PublicPackagePath => Path.Combine(_outputDirectory, $"RevitMcpChat-{Version}-win-x64.zip");
 
     public async Task InitializeAsync()
