@@ -36,6 +36,7 @@ public sealed class PackageTests : IClassFixture<PackageFixture>
     public void PackageContainsThreeYearManifests()
     {
         using var archive = ZipFile.OpenRead(_fixture.PublicPackagePath);
+        Assert.DoesNotContain(archive.Entries, entry => entry.FullName.Contains('\\'));
         Assert.Contains(archive.Entries, entry =>
             entry.FullName.Equals("docs/test-matrix.md", StringComparison.OrdinalIgnoreCase));
 
@@ -207,7 +208,7 @@ public sealed class PackageTests : IClassFixture<PackageFixture>
         await File.WriteAllTextAsync(scriptPath,
             "$ErrorActionPreference = 'Stop'" + Environment.NewLine +
             $". '{QuotePowerShellLiteral(helperPath)}'{Environment.NewLine}" +
-            $"Compress-ArchiveWithRetry -Path '{QuotePowerShellLiteral(Path.Combine(sourceDirectory, "*"))}' " +
+            $"Compress-ArchiveWithRetry -SourceDirectory '{QuotePowerShellLiteral(sourceDirectory)}' " +
             $"-DestinationPath '{QuotePowerShellLiteral(archivePath)}' -CompressionLevel Optimal{Environment.NewLine}");
 
         using var fileLock = new FileStream(sourceFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None);

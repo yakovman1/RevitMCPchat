@@ -172,7 +172,7 @@ $($entries -join ",`r`n")
     if (Test-Path -LiteralPath $packagePath) {
         Remove-Item -LiteralPath $packagePath -Force
     }
-    Compress-ArchiveWithRetry -Path (Join-Path $stagePath '*') -DestinationPath $packagePath -CompressionLevel Optimal
+    Compress-ArchiveWithRetry -SourceDirectory $stagePath -DestinationPath $packagePath -CompressionLevel Optimal
     Write-Host "Package created: $packagePath"
 }
 catch {
